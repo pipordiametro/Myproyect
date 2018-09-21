@@ -1,0 +1,1731 @@
+---
+title: "ALPASA FARMS"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    logo: images/logo.JPG
+    favicon: images/logo.JPG
+runtime: shiny_prerendered
+
+---
+
+```{r, context = "setup"}
+library(flexdashboard)
+library(DT)
+library(stringr)
+library(tidyr)
+library(highcharter)
+library(rmarkdown)
+library(xts)
+library(forecast)
+source("funciones.R")
+```
+
+
+```{r context = "data", include=FALSE}
+
+#entradas de fruta
+
+entradas_fruta_a <- entradas.fruta(Campos = c("Fecha", "Clave_productor", "Clave_producto", "Aceptadas", "Clave_acopio", "Precio"))%>%
+  collect()%>%
+  mutate(Fecha = as.Date(Fecha))
+
+entradas_fruta <- entradas_fruta_a%>%
+  filter(Fecha >= inicio_temporada)
+
+#entradas de material
+entradas_material <- entradas.material()%>%
+  collect()
+
+entregas_material <- entregas.material(Campos = c( "Tipo_salida", "Clave_productor", 
+                                      "Fecha", "Cantidad", "Clave_material",
+                                      "Tipo_receptor", "Clave_acopio"))%>%
+  collect()
+
+#productores activos
+productores <-   data.frame(Clave_productor = unique(entradas_fruta%>%
+                                                       select(Clave_productor)%>%
+                                                       collect()))%>%
+    nombres.productores()%>%
+  collect()%>%
+ mutate(Nombre_completo = paste0(Apellido_paterno, " ",  Apellido_materno, " ",  Nombre))%>%
+    rename(Codigo = Clave_productor)
+
+#acopios
+acopios <- data.frame(Clave_acopio = unique(entradas_fruta%>%
+                                              select(Clave_acopio)%>%
+                                              collect()))%>%
+  get.acopio()
+
+#Pesos de las presentaciones
+presentaciones <-  merge(myfetch("tbProductos")%>%
+        filter(strCan_cel == "NO"),
+      myfetch("tbPresentaciones")%>%
+        filter(strCan_cel == "NO"), 
+      by = "intCla_pre", suffixes = c("h", "b"))%>%
+  transmute(Clams = as.integer(intCan_tid), Peso = as.numeric(intPes_o), 
+            Unidad = strUni_med)%>%
+ #  filter(Unidad == "OZ")%>%
+  mutate(Presentacion = paste0(Clams,"X", Peso, Unidad))%>%
+   unique()%>%
+   mutate(Peso_total = ifelse(Unidad == "OZ", Peso*Clams,
+                              ifelse(Unidad =="G", Peso*Clams*0.035274, 
+                                     ifelse(Unidad == "KG",Peso*Clams*35.274,
+                                            ifelse(Unidad == "LB", Peso*Clams*16, NA)))))%>%
+   select(Presentacion, Peso_total)
+
+#Lista de materiales  
+load.materiales(Campos = c("Material"))
+
+
+materiales <- setNames(materiales$Clave_material, materiales$Material)
+
+
+
+
+
+
+```
+
+Producores {data-navmenu="PRODUCCION"}
+==========================================================================
+
+
+Inputs {.sidebar}
+--------------------------------------------------------------------------------
+
+###Ajustes
+```{r}
+selectInput("Presentacion", "Produccion en:",
+            choices = presentaciones$Presentacion,
+            selected = "12X6OZ")
+
+
+conditionalPanel(condition = "input.Acopio != null || input.Productor != null", 
+              
+                          selectInput("INTERVALO", "Ver por:",
+                                      choices = c("Semana", "Diario"),
+                                      selected = "Semana")
+            
+)
+
+```
+
+
+
+###Filtros
+```{r}
+
+selectizeInput("Acopio", label = "Selecione un Acopio",
+            choices = setNames(acopios$Clave_acopio, acopios$Acopio),
+            options = list(placeholder = 'Seleccione  un Acopio', maxItems = 1), 
+            multiple = TRUE)
+
+
+selectizeInput("Productor", label = "Productores",
+            choices = paste(productores$Codigo, productores$Nombre_completo), 
+            options = list(placeholder = 'Seleccione un productor', maxItems = 1), multiple = TRUE)
+
+
+
+
+
+
+
+
+# Productos input
+uiOutput("Frutas")
+uiOutput("Productos")
+
+
+#Fechas input 
+
+dateRangeInput("Fechas", "Seleccione un rango", start = inicio_temporada, end = max(entradas_fruta$Fecha))
+
+
+```
+
+```{r, context = "server"}
+
+
+output$Frutas<- renderUI({
+  
+  frutas <- data.frame(Clave_producto = unique(entradas_prod_ini()$Clave_producto))%>%
+    get.productos("Fruta")
+
+  
+  selectizeInput("Frutas", "Frutas", choices = unique(frutas$Fruta), multiple = TRUE, selected = unique(frutas$Fruta))
+  
+  
+})
+ 
+output$Productos <- renderUI({
+
+productos <-  data.frame(Clave_producto = unique(entradas_prod_ini()$Clave_producto))%>%
+    get.productos("Producto")
+
+selectizeInput("Producto", label = "Filtre un producto", options = list(placeholder = "Seleccione un producto"),
+                          choices = productos$Producto, multiple = TRUE)
+
+})
+```
+
+###
+```{r, context = "server"}
+
+entradas_totales <- ddply(entradas_fruta%>%
+                            select(Fecha, Clave_producto, Aceptadas, Clave_acopio)%>%
+                            collect()%>%
+                            tiempos("Semana"),
+                          .(Semana, Clave_producto, Clave_acopio), summarize, Total = sum(Aceptadas))
+
+
+peso <- reactive({merge(data.frame(Presentacion = input$Presentacion), presentaciones)})
+
+#entradas inicial
+
+entradas_prod_ini <- reactive({
+
+  if(is.null(input$Acopio) & is.null(input$Productor)){
+    
+    entradas_totales%>%
+      ddply(.(Semana, Clave_producto), summarize, Total = sum(Total))%>%
+       get.productos(Campos = c("Fruta", "Nombre_producto", "Presentacion",  "Producto"))%>%
+      merge(presentaciones)%>%
+      mutate(Fraccion = Peso_total/peso()$Peso_total)
+      
+    
+  }else{
+    
+    if(!is.null(input$Acopio) & is.null(input$Productor)){
+     
+    entradas_fruta%>%
+    select(Fecha, Clave_producto, Aceptadas, Clave_acopio)%>%
+        filter(Clave_acopio == input$Acopio)%>%
+    ddply(.(Fecha, Clave_producto), summarize, Total = sum(Aceptadas))%>%
+    get.productos(Campos = c("Fruta", "Nombre_producto", "Presentacion", "Producto"))%>%
+          merge(presentaciones)%>%
+      mutate(Fraccion = Peso_total/peso()$Peso_total)%>%
+    filter(Fecha > input$Fechas[1], Fecha < input$Fechas[2])%>%
+        tiempos("Semana")
+       
+      
+    }else{
+  
+  
+    
+  entradas_fruta%>%
+    select(Fecha, Clave_productor, Clave_producto, Aceptadas, Clave_acopio)%>%
+        filter(Clave_productor %in% str_match(input$Productor, "^[[0-9]]{0,3}")[,1])%>%
+    ddply(.(Fecha, Clave_productor, Clave_producto), summarize, Total = sum(Aceptadas))%>%
+    get.productos(Campos = c("Fruta", "Nombre_producto", "Presentacion", "Producto"))%>%
+          merge(presentaciones)%>%
+      mutate(Fraccion = Peso_total/peso()$Peso_total)%>%
+    filter(Fecha > input$Fechas[1], Fecha < input$Fechas[2])
+    
+  }}
+    
+})
+
+
+
+entradas_productor <- reactive({  
+  
+  if(input$INTERVALO == "Diario"){  
+x  <-  entradas_prod_ini()%>%
+      filter(Fruta %in% input$Frutas)
+      
+    
+  }else{
+    
+   
+x <- entradas_prod_ini()%>%
+         filter(Fruta %in% input$Frutas)
+     
+    }
+  
+
+if(!is.null(input$Producto)){
+  
+  x%>%
+    filter(Producto %in% input$Producto)
+
+  } else {
+  
+    x
+}
+  
+})
+
+
+presentacion <- reactive({
+  input$Presentacion
+})
+
+```
+
+
+
+Nombre
+--------------------------------------------------------------------------
+
+```{r, context = "server"}
+
+stats <- reactive({
+  
+  
+if(is.null(input$Acopio) & is.null(input$Productor)){
+  
+  entradas_productor()%>%
+  ddply(.(Semana), summarize, Total = sum(Total*Fraccion))%>%
+  filter(Total != 0)%>%
+  summarize( Maximo = round(max(Total),2),
+             Minimo = round(min(Total),2),
+             Acumulado = round(sum(Total)))
+  
+}else{
+  if(!is.null(input$Acopio) & is.null(input$Productor)){
+  
+    if(input$INTERVALO == "Diario"){
+  
+entradas_productor()%>%
+  ddply(.(Fecha), summarize, Total = sum(Total*Fraccion))%>%
+      filter(Total != 0)%>%
+    summarize(Maximo = round(max(Total),2),
+             Minimo = round(min(Total),2),
+             Acumulado = round(sum(Total)))
+  
+  }else{
+  
+  if(input$INTERVALO == "Semana"){
+    
+entradas_productor()%>%
+      tiempos("Semana")%>%
+  ddply(.(Semana), summarize, Total = sum(Total*Fraccion))%>%
+  filter(Total != 0)%>%
+  summarize(Maximo = round(max(Total),2),
+             Minimo = round(min(Total),2),
+             Acumulado = round(sum(Total)))
+
+    
+  }
+ 
+  }
+  
+  
+}else{
+  if(!is.null(input$Productor)){
+
+  
+  if(input$INTERVALO == "Diario"){
+  
+entradas_productor()%>%
+  ddply(.(Fecha, Clave_productor), summarize, Total = sum(Total*Fraccion))%>%
+      filter(Total != 0)%>%
+  ddply(.(Clave_productor),
+  summarize, Maximo = round(max(Total),2),
+             Minimo = round(min(Total),2),
+             Acumulado = round(sum(Total)))
+  
+  }else{
+  
+  if(input$INTERVALO == "Semana"){
+    
+entradas_productor()%>%
+      tiempos("Semana")%>%
+  ddply(.(Semana, Clave_productor), summarize, Total = sum(Total*Fraccion))%>%
+  filter(Total != 0)%>%
+      ddply(.(Clave_productor),
+  summarize, Maximo = round(max(Total),2),
+             Minimo = round(min(Total),2),
+             Acumulado = round(sum(Total)))
+    
+  }
+  }
+}
+}
+}
+})
+```
+
+
+```{r, context = "server"}
+
+
+output$nombre <- renderValueBox(
+  if(is.null(input$Acopio) & is.null(input$Productor)){
+valueBox("Produccion Total")
+}else{
+  if(!is.null(input$Acopio) & is.null(input$Productor)){
+   valueBox(data.frame(Clave_acopio = input$Acopio))
+  }else{
+    valueBox(input$Productor)
+  }
+}
+)
+
+ #Minimo
+
+output$Minimo<- renderValueBox(valueBox(stats()$Minimo))
+
+#Fecha
+output$Fecha <- renderValueBox(
+  if(is.null(input$Acopio) & is.null(input$Produtor)){
+    valueBox(max(as.Date(entradas_fruta$Fecha)))
+  }else{
+  valueBox(max(entradas_productor()$Fecha))
+})
+output$Acumulado <- renderValueBox(valueBox(stats()$Acumulado))
+
+
+
+fondoplot <- "transparent"
+areacolor <- "rgba(6,144,207,.8)"
+#####Produccion
+
+output$Produccion <- renderHighchart(
+ 
+if(is.null(input$Acopio) & is.null(input$Productor)){
+        hchart(
+      entradas_productor()%>%
+        ddply(.(Semana), 
+              summarize, 
+              Total = sum(Total*Fraccion))%>%
+        semanas(Campos = list(Total = 0)),
+          hcaes(x = Semana, 
+                y = Total),
+      name = "Produccion",
+      type = "area", 
+      color = list(linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+                   stops = list(list(0, "transparent"),
+                                list(1, areacolor))), 
+      fillcolor = list(linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+                       stops = list(list(0, "transparent"),
+                                    list(1, areacolor))))%>%
+      hc_chart(zoomType = "xy", 
+               panKey = "ctrl", 
+               panning = TRUE, 
+               backgroundColor = fondoplot)%>%
+        hc_xAxis(categories = sort(unique(data.frame(Semana = factor(c(1:52), 
+                                                                     levels = (c(34:85)%%52 + 1), 
+                                                                     ordered = TRUE))[,1])),
+                 crosshair = TRUE)%>%
+      hc_tooltip(crosshair = TRUE)%>%
+      hc_plotOptions(area = list(tooltip = list(shared = true,
+                                               split = true,
+                                               useHTML= true,
+                                               headerFormat =  '<small style="color: {point.color}">Semana:{point.key}</small><table>',
+                                               pointFormat = '<br><tr><td style="color: {point.color}">Produccion: </td></br>
+                                                              <br style="color: #000000">{point.y} Cajas</br>' ,
+                                               valueDecimals = 2)))
+ 
+}else{
+  if(!is.null(input$Acopio) & is.null(input$Productor)){
+    
+    if(input$INTERVALO == "Semana"){
+     
+      hchart(
+      entradas_productor()%>%
+        ddply(.(Semana), summarize, Total = sum(Total*Fraccion))%>%
+        semanas(Campos = list(Total = 0)),
+          hcaes(x = Semana, y = Total), type = "area",
+            color = list(linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+                   stops = list(list(0, "transparent"),
+                                list(1, areacolor))), 
+      fillcolor = list(linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+                       stops = list(list(0, "transparent"),
+                                    list(1, areacolor))))%>%
+     hc_chart(zoomType = "xy", panKey = "ctrl", panning = TRUE, backgroundColor = fondoplot)%>%
+        hc_xAxis(categories = sort(unique(data.frame(Semana = factor(c(1:52), levels = (c(34:85)%%52 + 1), ordered = TRUE))[,1])))%>%
+                hc_xAxis(categories = sort(unique(data.frame(Semana = factor(c(1:52), 
+                                                                     levels = (c(34:85)%%52 + 1), 
+                                                                     ordered = TRUE))[,1])),
+                 crosshair = TRUE)%>%
+      hc_tooltip(crosshair = TRUE)%>%
+      hc_plotOptions(area = list(tooltip = list(shared = true,
+                                               split = true,
+                                               useHTML= true,
+                                               headerFormat =  '<small style="color: {point.color}">Semana:{point.key}</small><table>',
+                                               pointFormat = '<br><tr><td style="color: {point.color}">Produccion: </td></br>
+                                                              <br style="color: #000000">{point.y} Cajas</br>' ,
+                                               valueDecimals = 2)))
+    }else{
+      
+      
+      if(input$INTERVALO == "Diario"){
+         
+        hchart(
+      entradas_productor()%>%
+            ddply(.(Fecha), summarize, Total = sum(Total*Fraccion))%>%
+#        mutate(Fecha = as.Date(Fecha))%>%
+            dias(Campos = list(Total = 0)), 
+          hcaes(x = Fecha, y = Total), type = "area",
+            color = list(linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+                   stops = list(list(0, "transparent"),
+                                list(1, areacolor))), 
+      fillcolor = list(linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+                       stops = list(list(0, "transparent"),
+                                    list(1, areacolor))))%>%
+    hc_chart(zoomType = "xy", panKey = "ctrl", panning = TRUE, backgroundColor = fondoplot)%>%
+          hc_xAxis(cosshair = TRUE)%>%
+                hc_tooltip(crosshair = TRUE)%>%
+      hc_plotOptions(area = list(tooltip = list(shared = true,
+                                               split = true,
+                                               useHTML= true,
+                                               headerFormat =  '<small style="color: {point.color}">{point.key}</small><table>',
+                                               pointFormat = '<br><tr><td style="color: {point.color}">Produccion: </td></br>
+                                                              <br style="color: #000000">{point.y} Cajas</br>' ,
+                                               valueDecimals = 2)))
+    }else{
+        
+        
+      }
+    }
+    
+  }else{
+       if(input$INTERVALO == "Semana"){
+     
+      hchart(
+      entradas_productor()%>%
+        tiempos("Semana")%>%
+        ddply(.(Semana, Clave_productor), summarize, Total = sum(Total*Fraccion))%>%
+        semanas(Campos = list(Total = 0, Clave_productor = str_match(input$Productor, "^[[0-9]]{0,3}")[,1])),
+          hcaes(x = Semana, y = Total, group = Clave_productor),type = "area",
+            color = list(linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+                   stops = list(list(0, "transparent"),
+                                list(1, areacolor))), 
+      fillcolor = list(linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+                       stops = list(list(0, "transparent"),
+                                    list(1, areacolor))))%>%
+     hc_chart(zoomType = "xy", panKey = "ctrl", panning = TRUE, backgroundColor = fondoplot)%>%
+        hc_xAxis(categories = sort(unique(data.frame(Semana = factor(c(1:52), levels = (c(34:85)%%52 + 1), ordered = TRUE))[,1])))%>%
+                           hc_tooltip(crosshair = TRUE)%>%
+      hc_plotOptions(area = list(tooltip = list(shared = true,
+                                               split = true,
+                                               useHTML= true,
+                                               headerFormat =  '<small style="color: {point.color}">Semana: {point.key}</small><table>',
+                                               pointFormat = '<br><tr><td style="color: {point.color}">Produccion: </td></br>
+                                                              <br style="color: #000000">{point.y} Cajas</br>' ,
+                                               valueDecimals = 2)))
+    }else{
+      
+      if(input$INTERVALO == "Diario"){
+         
+        hchart(
+      entradas_productor()%>%
+            ddply(.(Fecha, Clave_productor), summarize, Total = sum(Total*Fraccion))%>%
+#        mutate(Fecha = as.Date(Fecha))%>%
+            dias(Campos = list(Total = 0, Clave_productor = str_match(input$Productor, "^[[0-9]]{0,3}")[,1])), 
+          hcaes(x = Fecha, y = Total, group = Clave_productor), type = "area",
+            color = list(linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+                   stops = list(list(0, "transparent"),
+                                list(1, areacolor))), 
+      fillcolor = list(linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+                       stops = list(list(0, "transparent"),
+                                    list(1, areacolor))))%>%
+        hc_chart(zoomType = "xy", panKey = "ctrl", panning = TRUE, backgroundColor = fondoplot)%>%
+          hc_xAxis(cosshair = TRUE)%>%
+                hc_tooltip(crosshair = TRUE)%>%
+      hc_plotOptions(area = list(tooltip = list(shared = true,
+                                               split = true,
+                                               useHTML= true,
+                                               headerFormat =  '<small style="color: {point.color}">{point.key}</small><table>',
+                                               pointFormat = '<br><tr><td style="color: {point.color}">Produccion: </td></br>
+                                                              <br style="color: #000000">{point.y} Cajas</br>' ,
+                                               valueDecimals = 2)))
+          
+        
+        
+      }
+    }
+  }
+} 
+)
+
+output$Productosplot<- renderHighchart(
+if(is.null(input$Acopio) & is.null(input$Productor)){
+  
+  
+    myhcsemana(entradas_productor()%>%
+          mutate(Producto = paste(Nombre_producto, Presentacion, Fruta))%>%
+          ddply(.(Semana, Producto), summarize, Total = sum(Total)))
+  
+}else{
+if(input$INTERVALO == "Diario"){
+         
+      hchart(entradas_productor()%>%
+          mutate(Producto = paste(Nombre_producto, Presentacion, Fruta))%>%
+          ddply(.(Fecha, Producto), summarize, Total = sum(Total)),
+          hcaes(x = Fecha, y = Total, group = Producto), type = "column")%>%
+          hc_chart(zoomType = "xy", panKey = "ctrl", panning = TRUE)
+        
+        
+      }else{
+     
+      myhcsemana(entradas_productor()%>%
+                   tiempos("Semana")%>%
+          mutate(Producto = paste(Nombre_producto, Presentacion, Fruta))%>%
+          ddply(.(Semana, Producto), summarize, Total = sum(Total)))
+        
+      }
+}
+)
+
+
+output$Tabla<- renderDataTable(
+  
+if(is.null(input$Acopio) & is.null(input$Productor)){  
+  datatable(entradas_productor()%>%
+              mutate(Total_presentacion = Total*Fraccion)%>%
+              select(Nombre_producto, Presentacion, Fruta, Total, Total_presentacion, Semana)%>%
+              arrange(Semana), rownames = FALSE,
+                                                 style = "bootstrap",
+                                                 class = "display compact",
+                                                 #filter = 'top',
+                                                 options = list(
+                                                   pageLength = 8))
+}else{
+  if(input$INTERVALO == "Semana"){
+      datatable(entradas_productor()%>%
+                  tiempos("Semana")%>%
+              mutate(Total_presentacion = Total*Fraccion)%>%
+              select(Nombre_producto, Presentacion, Fruta, Total, Total_presentacion, Semana)%>%
+                ddply(.(Semana, Nombre_producto, Presentacion, Fruta),summarize,  Total = sum(Total), Total_presentacion = sum(Total_presentacion))%>%
+              arrange(Semana),
+              rownames = FALSE,
+                                                 style = "bootstrap",
+                                                 class = "display compact",
+                                            #     filter = 'top',
+                                                 options = list(
+                                                   pageLength = 8))
+              
+  }else{
+    if(input$INTERVALO == "Diario"){
+           datatable(entradas_productor()%>%
+              mutate(Total_presentacion = Total*Fraccion)%>%
+                tiempos("Semana")%>%
+              select(Fecha, Nombre_producto, Presentacion, Fruta, Total, Total_presentacion, Semana)%>%
+              arrange(Fecha),
+              rownames = FALSE,
+                                                 style = "bootstrap",
+                                                 class = "display compact",
+                                                 filter = 'top',
+                                                 options = list(
+                                                   pageLength = 8)
+           )
+      
+    }
+  }
+}
+)
+```
+
+
+###Nombre
+```{r, context = "render" }
+
+valueBoxOutput("nombre")
+
+```
+
+Indicadores
+-----------------------------------------------------------------------
+
+###Minimo 
+```{r, context = "render" }
+
+valueBoxOutput("Minimo")
+
+```
+
+### Ultima entrega
+```{r}
+
+valueBoxOutput("Fecha")
+
+```
+
+### Acumulado
+```{r }
+
+valueBoxOutput("Acumulado")
+
+```  
+
+Visualizacion {.tabset}
+-----------------------------------------------------------------------
+
+### Produccion en 6oz
+```{r}
+highchartOutput("Produccion")
+
+
+```
+
+### Productos
+```{r}
+highchartOutput("Productosplot")
+```
+
+### Tabla de Datos
+```{r}
+dataTableOutput("Tabla")
+```
+
+###Historico
+
+```{r, context = "server"}
+
+historico <- reactive({
+ 
+  x <- entradas_fruta_a%>%
+      get.productos(Campos = c("Presentacion", "Fruta", "Producto"))
+  
+
+      if(!is.null(input$Acopio)){
+    x <- x%>%filter(Clave_acopio == input$Acopio)
+  }
+  
+  if(!is.null(input$Productor)){
+    x <- x%>%filter(Clave_productor == str_match(input$Productor, "^[[0-9]]{0,3}")[,1])
+    
+  }
+  
+  if(!is.null(input$Producto)){
+    
+    x <- x%>%filter(Producto %in% input$Producto)
+  }
+    
+  
+    x%>%
+       filter(Fruta %in% input$Frutas)%>%
+      tiempos(Campos = c("Semana", "Temporada"))%>%
+      merge(presentaciones, by = "Presentacion", all.x = TRUE)%>%
+      mutate(Fraccion = Peso_total/peso()$Peso_total)%>%
+      ddply(.(Semana, Temporada),
+            summarize, 
+            Total = sum(Aceptadas*Fraccion, na.rm = TRUE ))
+      
+})
+
+
+  
+output$Historico <- renderHighchart({
+  
+  hc <- highchart(type  = "chart")%>%
+  hc_xAxis(categories = sort(unique(data.frame(Semana = factor(c(1:52), 
+                                                               levels = (c(34:85)%%52 + 1), 
+                                                               ordered = TRUE))[,1])),
+           crosshair = TRUE)%>%
+    hc_chart(zoomType = "xy", panKey = "ctrl", panning = TRUE, backgroundColor = fondoplot)%>%
+    hc_tooltip(crosshair = TRUE,
+               shared = TRUE,
+               split = FALSE)%>%
+   hc_plotOptions(line = list(tooltip = list( useHTML= TRUE,
+                                              headerFormat =  '<small>Semana:{point.key}</small><table>',
+                                              pointFormat = '<br><tr><td style="color: {point.color}"> {series.name} : </td></br>
+                                                             <br style="color: #000000"> {point.y} Cajas</br>' ,
+                                              valueDecimals = 2)))
+   
+
+for(var in sort(unique(historico()$Temporada))){
+  
+  df <- historico()%>%
+    filter(Temporada == var)%>%
+    semanas(Campos = list(Total = 0))%>%
+    arrange(Semana)
+    
+serie <- list(list(x = df$Semana, data = df$Total, name = var)) 
+
+hc <- hc_add_series_list(hc,serie)
+  
+}
+
+hc
+})
+
+
+```
+
+```{r}
+highchartOutput("Historico")
+```
+
+
+Estadisticas {data-navmenu="PRODUCCION"}
+============================================================
+
+Inputs {.sidebar}
+--------------------------------------------------------------------------------
+
+###Ajustes
+```{r}
+selectInput("Presentacion_e", "Produccion en:",
+            choices = presentaciones$Presentacion,
+            selected = "12X6OZ")
+
+
+
+```
+
+
+
+###Filtros
+```{r}
+
+selectizeInput("Acopio_e", label = "Selecione un Acopio",
+            choices = setNames(acopios$Clave_acopio, acopios$Acopio),
+            options = list(placeholder = 'Seleccione  un Acopio', maxItems = 1), 
+            multiple = TRUE)
+
+
+selectizeInput("Productor_e", label = "Productores",
+            choices = paste(productores$Codigo, productores$Nombre_completo), 
+            options = list(placeholder = 'Seleccione un productor', maxItems = 1), multiple = TRUE)
+
+
+# Productos input
+uiOutput("Frutas2")
+uiOutput("Productos2")
+
+
+#Fechas input 
+
+dateRangeInput("Fechas_e", "Seleccione un rango", start = max(entradas_fruta$Fecha)-7, end = max(entradas_fruta$Fecha))
+
+
+```
+
+```{r, context = "server"}
+output$Frutas2<- renderUI({
+  
+  frutas <- data.frame(Clave_producto = unique(entradas_prod_ini()$Clave_producto))%>%
+    get.productos("Fruta")
+
+  
+  selectizeInput("Frutas_e", "Frutas", choices = unique(frutas$Fruta), multiple = TRUE, selected = unique(frutas$Fruta))
+  
+  
+})
+ 
+output$Productos2 <- renderUI({
+
+productos <-  data.frame(Clave_producto = unique(entradas_prod_ini()$Clave_producto))%>%
+    get.productos("Producto")
+
+selectizeInput("Producto_e", label = "Filtre un producto", options = list(placeholder = "Seleccione un producto"),
+                          choices = productos$Producto, multiple = TRUE)
+
+})
+```
+
+```{r, context = "server"}
+
+entradas <- reactive({
+  
+  x <- entradas_fruta%>%
+    get.productos(Campos = c("Fruta", "Producto"))%>%
+    filter( Fruta %in% input$Frutas_e, Fecha >= input$Fechas_e[1], Fecha <= input$Fechas_e[2])
+    
+    
+    
+  
+  if(!is.null(input$Acopio_e)){
+  
+    x <- x%>%
+    filter(Clave_acopio == input$Acopio_e)  
+  }
+  
+  if(!is.null(input$Productor_e)){
+    x <- x%>%
+      filter(Clave_productor == str_match(input$Productor_e, "^[[0-9]]{0,3}")[,1])
+  }
+  
+  if(!is.null(input$Producto_e)){
+    
+  x <- x%>%
+    filter(Producto %in% input$Producto_e)
+  }
+  
+  x%>%
+    ddply(.(Fecha, Clave_productor, Clave_producto), 
+          summarize, 
+          Aceptadas = sum(Aceptadas))%>%
+    get.productos("Peso_total")%>%
+    mutate(Fraccion = Peso_total/peso()$Peso_total,
+           Aceptadas_presentacion = Aceptadas*Fraccion)%>%
+    ddply(.(Fecha, Clave_productor), summarize,
+          Aceptadas_totales = sum(Aceptadas),
+          Aceptadas_presentacion = sum(Aceptadas_presentacion))%>%
+    ddply(.( Clave_productor), summarize,
+        Minimo = round(min(Aceptadas_presentacion),2),
+        Maximo = round(max(Aceptadas_presentacion),2),
+        Promedio = round(mean(Aceptadas_presentacion),2),
+        Dias_entregando = n(),
+        Dias_sin_entregar = Sys.Date() - max(Fecha),
+        Totales = round(sum(Aceptadas_presentacion),2),
+        Cajas_totales = round(sum(Aceptadas_totales),2))%>%
+    nombres.productores()%>%
+    mutate(Nombre = paste(Nombre, Apellido_paterno, Apellido_materno))%>%
+    select(-Apellido_paterno, -Apellido_materno)%>%
+    rename(Codigo = Clave_productor)
+        
+        
+
+  
+  })
+
+output$Estadisticas <- renderDataTable(datatable(entradas(), 
+                                                 rownames = FALSE,
+                                                 style = "bootstrap",
+                                                 class = 'display compact',
+                                                 filter = 'top',
+                                                 options = list(
+                                                   pageLength = 9,
+                                                   autoWidth = TRUE,
+                                                   columnDefs=list(list(
+                                                     className = 'dt-center',
+                                                     targets = list(0,1,2,3,4,5,6,7,8)
+                                                   )))))
+```
+
+Tabla
+------------------------------------------------------------------------------
+
+###
+```{r}
+dataTableOutput("Estadisticas")
+```
+
+MATERIALES
+===========================================================================
+
+inputs {.sidebar}
+----------------------------------------------------------------------------
+
+
+###
+```{r}
+
+selectizeInput("Acopio_m", label = "Selecione un Acopio",
+            choices = setNames(acopios$Clave_acopio, acopios$Acopio),
+            options = list(placeholder = 'Seleccione  un Acopio', maxItems = 1), 
+            multiple = TRUE)
+
+
+selectizeInput("Productor_m", label = "Productores",
+            choices = paste(productores$Codigo,productores$Nombre_completo), 
+            options = list(placeholder = 'Seleccione un productor', maxItems = 1), multiple = TRUE)
+
+
+
+conditionalPanel(condition = "input.Productor_m == null",
+uiOutput("Materiales")
+)
+
+            
+  selectInput("Intervalo_m", "Ver por:",
+              choices = c("Semana", "Diario"),
+              selected = "Semana")                        
+            
+
+
+
+conditionalPanel(condition = "input.Productor_m != null", 
+selectInput("Presentacion",  "Selecione un material",
+            choices = presentaciones$Presentacion,
+            selected = "12X6OZ")
+)
+
+
+
+
+
+```
+
+```{r, context = "server"}
+
+
+
+
+
+flujos_productor <-  reactive({
+  
+  if(is.null(input$Productor_m)){
+    if(is.null(input$Acopio_m)){
+        x <-  rbind(
+  entradas_material%>%
+    select(Fecha, Clave_acopio, Clave_material, Cantidad),
+  entregas_material%>%
+    select(Fecha, Clave_acopio, Clave_material, Cantidad)%>%
+    mutate(Cantidad = -Cantidad))%>%
+    tiempos("Semana")%>%
+    get.material(Campos = c("Presentacion", "Tipo_material"))
+    }
+      
+  if(!is.null(input$Acopio_m)){
+          x <-  rbind(
+  entradas_material%>%
+    select(Fecha, Clave_acopio, Clave_material, Cantidad)%>%
+    filter(Clave_acopio == input$Acopio_m),
+  entregas_material%>%
+    select(Fecha, Clave_acopio, Clave_material, Cantidad)%>%
+    mutate(Cantidad = -Cantidad)%>%
+    filter(Clave_acopio == input$Acopio_m))%>%
+    tiempos("Semana")%>%
+    get.material(Campos = c("Presentacion", "Tipo_material"))
+          
+  }
+  }else{
+    
+    if(!is.null(input$Productor_m)){
+
+  y  <-   entradas_fruta%>%
+      filter(Clave_productor == str_match(input$Productor_m, "^[[0-9]]{0,3}")[,1])%>%
+    ddply(.(Fecha, Clave_producto), summarize, Total = sum(Aceptadas))
+
+  x <- rbind(
+                    #Cajas con fruta
+      y%>%
+        get.productos(Campos = c("Presentacion"))%>%
+      select(Fecha, Presentacion,Total)%>%
+      filter(Fecha >= inicio_temporada)%>%
+      mutate(Tipo_material = "CAJA EMP.", Tipo = "FRUTA", Total = - Total),   #Cajas con fruta
+                
+                             #clams con fruta
+    
+      y%>%
+        get.productos(Campos = c("Presentacion", "Peso", "Unidad", "Clams"))%>%
+                  mutate(Total = Total*Clams,
+                         Presentacion = paste0(Peso,Unidad))%>%
+      select(Fecha, Presentacion, Total)%>%
+      mutate(Tipo_material = "CLAMSHELL", Tipo = "FRUTA", Total = -Total),    
+                
+                #prestamos
+      entregas_material%>%
+      filter(Clave_productor == str_match(input$Productor_m, "^[[0-9]]{0,3}")[,1])%>%
+                  filter(Tipo_salida == "PRESTAMO", Tipo_receptor == "PRODUCTOR")%>%
+      select(Fecha, Clave_material, Cantidad)%>%
+      rename(Total = Cantidad)%>%
+      get.material(Campos = c("Presentacion", "Tipo_material")) %>%
+      mutate(Tipo = "PRESTAMO")%>%
+      select(Fecha, Presentacion, Total, Tipo_material, Tipo),
+    
+                #devoluciones
+          
+    entradas_material%>%
+      rename(Clave_productor = Clave_proveedor)%>%
+      filter(Clave_productor == str_match(input$Productor_m, "^[[0-9]]{0,3}")[,1])%>%
+      filter(Tipo_entrada == "DEVOLUCION", Tipo_proveedor == "PRODUCTOR")%>%
+      rename(Tipo = Tipo_entrada)%>%
+      get.material(Campos = c("Presentacion", "Tipo_material"))%>%
+      mutate(Total = -Cantidad)%>%
+      select(Fecha, Presentacion, Total, Tipo_material, Tipo))%>%
+    
+              #summarize
+    rename(Concepto = Tipo)%>%
+    ddply(.(Fecha, Concepto,Tipo_material, Presentacion), summarize, 
+          Total = sum(Total))%>%
+    tiempos(Campos = c("Semana"))
+  }}
+  
+  if(!is.null(input$Material)){
+    x%>%
+      filter(Clave_material == input$Material)
+  }else{
+    x
+  }
+})
+
+                          
+
+output$Materiales <-  renderUI(
+  selectizeInput("Material", label = "Selecione un material", options = list(placeholder = NULL),
+                          choices = materiales, multiple = TRUE))
+
+
+
+
+```
+
+
+
+Nombre
+--------------------------------------------------------------------------
+
+```{r, context = "server"}
+output$Nombre_m <- renderValueBox(
+  if(is.null(input$Productor_m) & is.null(input$Acopio_m)){
+    valueBox("Inventario total")
+  }else{
+     if(is.null(input$Productor_m) & !is.null(input$Acopio_m)){
+     valueBox(data.frame(Clave_acopio = input$Acopio_m))
+     }else{
+       if(!is.null(input$Productor_m)){
+      valueBox(input$Productor_m)
+    }
+  }
+    
+   
+})
+```
+
+###Nombre
+```{r}
+
+valueBoxOutput("Nombre_m")
+
+```
+
+Visualizaciones {.tabset}
+-----------------------------------------------------------------------
+
+###Grafico
+
+```{r, context = "server"}
+output$Grafico_m <- renderHighchart(
+  
+  if (!is.null(input$Productor_m) & input$Intervalo_m == "Semana"){
+  myhcsemana.line(flujos_productor()%>%
+                 ddply(.(Semana, Tipo_material, Presentacion), summarize, Total = sum(Total))%>%
+               mutate(Total = ifelse(Tipo_material == "CLAMSHELL", Total/12, Total)), name = "Presentacion")
+  
+  }else{
+    if(!is.null(input$Productor_m) & input$Intervalo_m == "Diario"){
+      flujos_productor()%>%
+        ddply(.(Fecha, Tipo_material, Presentacion), summarize, Total = sum(Total))%>%
+        mutate(Total = ifelse(Tipo_material == "CLAMSHELL", Total/12, Total))%>%
+        myhcdiario.line(name = "Presentacion")
+    }else{
+      myhcsemana.line(flujos_productor()%>%
+                 ddply(.(Semana, Tipo_material, Presentacion), summarize, Total = sum(Cantidad))%>%
+               mutate(Total = ifelse(Tipo_material == "CLAMSHELL", Total/12, Total)), name = "Presentacion")
+        
+      
+    }
+  })
+
+
+```
+
+```{r}
+highchartOutput("Grafico_m")
+```
+
+###Saldos
+```{r, context = "server"}
+output$Saldos <- renderDataTable(
+  if(!is.null(input$Productor_m)){
+    datatable(flujos_productor()%>%
+              ddply(.(Tipo_material, Presentacion), summarize, Total = sum(Total)),
+              rownames = FALSE,
+              style = "bootstrap",
+              class = 'display compact',
+              options = list(
+                pageLength = 9,
+                autoWidth = TRUE,
+                columnDefs=list(list(
+                  className = 'dt-center',
+                  targets = list(0,1,2)
+                  ))))
+              
+  }else{
+    datatable(flujos_productor()%>%
+              ddply(.(Tipo_material, Presentacion), summarize, Total = sum(Cantidad)),
+              rownames = FALSE,
+              style = "bootstrap",
+              class = 'display compact',
+              options = list(
+                pageLength = 9,
+                autoWidth = TRUE,
+                columnDefs=list(list(
+                  className = 'dt-center',
+                  targets = list(0,1,2)
+                  ))))
+  }
+)
+```
+
+```{r}
+dataTableOutput("Saldos")
+```
+
+
+###Flujos
+```{r, context = "server"}
+output$Flujos <- renderDataTable(datatable(flujos_productor()))
+```
+
+```{r}
+dataTableOutput("Flujos")
+```
+
+
+
+PRECIOS
+=============================================================================================================
+
+
+
+
+
+inputs {.sidebar}
+----------------------------------------------------------------------------
+
+###
+```{r}
+
+selectInput("Fruta_p", "Frutas", choices = c("Zarzamora", "Arandano"), selected = "Zarzamora")
+
+
+actionButton("Update", "Actualizar usda" )
+
+selectInput("Tipo_p", "Tipo de grafico", choices = c("Monitor Burbujas", "Monitor Puntos", "Descomposicion", "Seasonal", "Proyeccion"),
+            selected = "Proyeccion")
+
+conditionalPanel(condition = "input.Tipo_p == \"Monitor Burbujas\" || input.Tipo_p == \"Monitor Puntos\"",
+ selectInput("Color", "Colorear por ", choices = c("Cliente", "Destino", "Producto"), selected = "Producto"))
+```
+
+```{r, context = "server"}
+ 
+
+```
+
+Grafico {.tabset}
+----------------------------------------------------------------------------
+
+```{r, context = "server"}
+
+observeEvent(input$Update, get.precios())
+  
+zar_usda <- zar.usda() 
+ara_usda <- ara.usda()
+
+zar_full <- reactive({
+  
+  if(input$Fruta_p == "Zarzamora"){
+
+  entradas_zar <- entradas_fruta_a%>%
+  mutate(Fecha = as.Date(Fecha))%>%
+  get.productos(c("Fruta", "Fraccion6oz"))%>%
+  filter(Fruta == "ZAR CN")%>%
+  mutate(Especial = ifelse(Clave_producto %in% c(10201,12030), 0, 1))%>%
+  ddply(.(Fecha), summarize, Volumen = sum(Aceptadas*Fraccion6oz), Especiales = sum(Aceptadas*Fraccion6oz*Especial))%>%
+  xts(order.by = .$Fecha)
+
+entradas_zar <- entradas_zar[,-1]
+
+zar_full <- merge(zar_usda["20130929/"], entradas_zar, fill = 0)
+
+rm(entradas_zar, zar_usda)
+#zar_full$SMA10 <- SMA(Cl(zar_full), 5)
+#10204
+precios6oz <- entradas_fruta_a%>%
+  filter(Clave_producto == 10201, Precio != 0)%>%
+  select(Fecha, Precio, Aceptadas, Clave_acopio)%>%
+  get.acopio()%>%
+  select(-Clave_acopio)%>%
+  ddply(.(Fecha, Acopio), summarize, 
+        Promedio = sum(Precio*Aceptadas)/sum(Aceptadas))%>%
+  spread(key = Acopio, Promedio)%>%
+  xts(order.by = .$Fecha)
+
+
+ merge(zar_full, precios6oz[,-1])
+
+
+  }else{
+     
+
+  ara_usda <- ara.usda()
+    
+  entradas_zar <- entradas_fruta_a%>%
+  mutate(Fecha = as.Date(Fecha))%>%
+  get.productos(c("Fruta", "Fraccion6oz"))%>%
+  filter(Fruta == "ARA BER")%>%
+  mutate(Especial = ifelse(Clave_producto %in% c(10201,12030), 0, 1))%>%
+  ddply(.(Fecha), summarize, Volumen = sum(Aceptadas*Fraccion6oz), Especiales = sum(Aceptadas*Fraccion6oz*Especial))%>%
+  xts(order.by = .$Fecha)
+
+entradas_zar <- entradas_zar[,-1]
+
+zar_full <- merge(ara_usda, entradas_zar, fill = 0)
+
+rm(entradas_zar, ara_usda)
+#zar_full$SMA10 <- SMA(Cl(zar_full), 5)
+#10204
+precios6oz <- entradas_fruta_a%>%
+  filter(Clave_producto == 10204, Precio != 0)%>%
+  select(Fecha, Precio, Aceptadas, Clave_acopio)%>%
+  get.acopio()%>%
+  select(-Clave_acopio)%>%
+  ddply(.(Fecha, Acopio), summarize, 
+        Promedio = sum(Precio*Aceptadas)/sum(Aceptadas))%>%
+  spread(key = Acopio, Promedio)%>%
+  xts(order.by = .$Fecha)
+
+
+ merge(zar_full, precios6oz[,-1])
+
+  }
+})
+
+
+
+######Liquidaciones  
+
+
+liquidaciones <- reactive({
+  
+  if(input$Fruta_p == "Zarzamora"){
+ x <-  liquid()%>%
+  filter(Clave_fruta == 1)%>%
+  ddply(.(Fecha, Folio, Clave_producto, Precio_real, Clave_cliente, 
+          Clave_destino), summarize, Total = sum(Cantidad))%>%
+  get.productos(Campos = c("Fraccion6oz", "Producto"))%>%
+  mutate(Precio = as.numeric(Precio_real/Fraccion6oz))%>%
+      mutate(Fecha = Fecha)%>%
+      get.cliente()%>%
+  get.destino()
+  }else{
+  x <-   liquid()%>%
+  filter(Clave_fruta == 4)%>%
+  ddply(.(Fecha, Folio, Clave_producto, Precio_real, Clave_cliente, 
+          Clave_destino), summarize, Total = sum(Cantidad))%>%
+  get.productos(Campos = c("Fraccion6oz", "Producto"))%>%
+  mutate(Precio = as.numeric(Precio_real/Fraccion6oz))%>%
+  #    mutate(Fecha = Fecha)%>%
+  get.cliente()%>%
+  get.destino()
+    
+  }
+   
+  x <- x%>%
+    mutate(Cliente = as.character(Cliente))
+    
+  if(input$Color == "Producto"){
+     x$master <- x$Producto
+   }else{
+     if(input$Color == "Cliente"){
+     x$master <- x$Cliente
+     }else{
+       if(input$Color == "Destino"){
+     x$master <- x$Pais
+   }
+    
+       
+  }}
+  
+  
+  x[!is.na(x$Precio),]%>%
+    select(Fecha, Precio, Total, master, Producto, Folio, Cliente, Pais)
+                
+})
+
+fruta <- reactive({
+  if(input$Fruta_p == "Zarzamora"){
+    zar_usda
+  }else{
+    ara_usda
+  }
+})              
+
+colores <- c( '#4363d8','#e6194b', '#f58231', '#3cb44b',  '#911eb4', '#fabebe', '#46f0f0', '#f032e6', '#ffe119', '#bcf60c',  '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080', '#ffffff', '#000000')
+
+output$Precios_master <- renderHighchart( 
+  
+  if(input$Tipo_p == "Monitor Burbujas"){
+  hc <-  highchart(type = "stock",  
+          list(rangeSelector = list(
+                                    selected = 4)))%>%
+      hc_colors(colors = colores)%>%
+  hc_yAxis_multiples(
+    create_yaxis(3, 
+                 height = c(2, 1, 1), 
+                 turnopposite = TRUE))%>%
+  hc_legend(enabled = TRUE)%>%
+  hc_add_series(zar_full()["20130920/"], 
+                type = "arearange", 
+                yAxis = 0, 
+                name = "Usda")%>%
+  hc_add_series(
+    zar_full()["20130920/"]$Volumen,
+    id = "Volumen",
+    color = list(
+      linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+      stops = list(
+        list(0, "transparent"),
+        list(1, "rgba(98,104,105,.4)"))), 
+    fillcolor = list(
+      linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+      stops = list(
+        list(0, "transparent"),
+        list(1, "rgba(98,104,105,.4)"))), 
+    yAxis = 1, name = "Volumen", type = "area")%>%
+  hc_add_series(zar_full()["20130920/"]$Especiales, 
+                color = list(
+                  linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+                  stops = list(
+                    list(0, "transparent"),
+                    list(1, "rgba(39,212,215,.40)"))), 
+                fillcolor = list(
+                  linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+                  stops = list(
+                    list(0, "transparent"),
+                    list(1, "rgba(39,212,215,.40)"))), 
+                yAxis = 1, name = "Pedidos", type = "area")%>%
+  hc_add_series(zar_full()["20130920/"]$LOS.REYES, 
+                color = "rgba(39,212,215,.75)", 
+                yAxis = 2, 
+                name = "Los Reyes", 
+                type = "line",
+                lineWidth  = 1)%>%
+  hc_add_series(zar_full()["20130920/"]$TANGANCICUARO, 
+                color = "rgba(245,15,15,.75)", 
+                yAxis = 2, 
+                name = "Tangancicuaro", 
+                type = "line",
+                lineWidth  = 1)%>%
+  hc_add_series(zar_full()["20130920/"]$DUVACANO, 
+                color = "rgba(130,253,6,.75)", 
+                yAxis = 2, 
+                name = "Duvacano", 
+                type = "line",
+                zIndex = 4)%>%
+  hc_add_series(zar_full()["20130920/"]$ZIRIMICUARO, 
+                color = "rgba(26,26,228,.75)", 
+                yAxis = 2, 
+                name = "Zirimicuaro", 
+                type = "line",
+                lineWidth  = 2,
+                zIndex = 3)%>%
+  hc_add_series(zar_full()["20130920/"]$Close, 
+                color = "cyan", 
+                yAxis = 0, 
+                name = "Usda_promedio", 
+                type = "line" )%>%
+  hc_plotOptions(bubble = list(minSize = 2, 
+                               maxSize = 25, 
+                               tooltip = list(
+                               shared = true,
+                               split = true,
+                               useHTML= true,
+                               headerFormat =  '<small>{point.key}</small><table>',
+                               pointFormat = '<tr><td style="color: {point.color}">Producto:</td>
+                                                  <br style="color: #000000">{point.Producto}</br>
+                                                  <br><td>Liquidacion: {point.y} USD </td></br>
+                                                  <br><td>Cajas 6oz: {point.z} </td></br>
+                                                   <br><td>Folio: {point.Folio} </td></br>
+                                                  <br><td>Cliente: {point.Cliente} </td></br>
+                                                  <br><td>Destino: {point.Pais} </td></br>',
+                               valueDecimals = 2)))%>%
+  hc_chart(zoomType = "x", 
+           panKey = "ctrl", 
+           panning = TRUE)
+  
+  
+    for(var in unique(liquidaciones()$master)){
+    
+    df <- liquidaciones()%>%
+      filter(master == var)%>%
+      mutate(dt = datetime_to_timestamp(Fecha))
+    
+    
+    hc <- hc_add_series(hc, df, 
+                   name = var, 
+                   yAxis = 0,
+                  hcaes(
+                   x = dt, 
+                   y = Precio, 
+                   z = Total),
+                   type = "bubble")
+  }
+  
+  hc
+  
+
+
+  }else{
+    if(input$Tipo_p == "Monitor Puntos"){
+  hc <-     highchart(type = "stock",  
+          list(rangeSelector = list(
+            selected = 4)))%>%
+              hc_colors(colors = colores)%>%
+  hc_yAxis_multiples(
+    create_yaxis(3, 
+                 height = c(2, 1, 1), 
+                 turnopposite = TRUE))%>%
+  hc_legend(enabled = TRUE)%>%
+  hc_add_series(zar_full()["20130920/"], 
+                type = "arearange", 
+                yAxis = 0, 
+                name = "Usda")%>%
+  hc_add_series(
+    zar_full()["20130920/"]$Volumen,
+    id = "Volumen",
+    color = list(
+      linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+      stops = list(
+        list(0, "transparent"),
+        list(1, "rgba(98,104,105,.4)"))), 
+    fillcolor = list(
+      linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+      stops = list(
+        list(0, "transparent"),
+        list(1, "rgba(98,104,105,.4)"))), 
+    yAxis = 1, name = "Volumen", type = "area")%>%
+  hc_add_series(zar_full()["20130920/"]$Especiales, 
+                color = list(
+                  linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+                  stops = list(
+                    list(0, "transparent"),
+                    list(1, "rgba(39,212,215,.40)"))), 
+                fillcolor = list(
+                  linearGradient = list(x1 = 0, x2 = 0, y1 = 0, y2 = 1),
+                  stops = list(
+                    list(0, "transparent"),
+                    list(1, "rgba(39,212,215,.40)"))), 
+                yAxis = 1, name = "Pedidos", type = "area")%>%
+  hc_add_series(zar_full()["20130920/"]$LOS.REYES, 
+                color = "rgba(39,212,215,.75)", 
+                yAxis = 2, 
+                name = "Los Reyes", 
+                type = "line",
+                lineWidth  = 1)%>%
+  hc_add_series(zar_full()["20130920/"]$TANGANCICUARO, 
+                color = "rgba(245,15,15,.75)", 
+                yAxis = 2, 
+                name = "Tangancicuaro", 
+                type = "line",
+                lineWidth  = 1)%>%
+  hc_add_series(zar_full()["20130920/"]$DUVACANO, 
+                color = "rgba(130,253,6,.75)", 
+                yAxis = 2, 
+                name = "Duvacano", 
+                type = "line",
+                zIndex = 4)%>%
+  hc_add_series(zar_full()["20130920/"]$ZIRIMICUARO, 
+                color = "rgba(26,26,228,.75)", 
+                yAxis = 2, 
+                name = "Zirimicuaro", 
+                type = "line",
+                lineWidth  = 2,
+                zIndex = 3)%>%
+  hc_add_series(zar_full()["20130920/"]$Close, 
+                color = "cyan", 
+                yAxis = 0, 
+                name = "Usda_promedio", 
+                type = "line" )%>%
+  hc_plotOptions(scatter = list(marker = list(symbol = "circle"),
+                                tooltip = list(shared = true,
+                                               split = true,
+                                               useHTML= true,
+                                               headerFormat =  '<small>{point.key}</small><table>',
+                                               pointFormat = '<tr><td style="color: {point.color}">Producto:</td>
+                                              <br style="color: #000000">{point.Producto}</br>
+                                              <br><td>Liquidacion: {point.y} USD </td></br>
+                                              <br><td>Cajas 6oz: {point.Total} </td></br>
+                                              <br><td>Floio: {point.Folio} </td></br>
+                                              <br><td>Cliente: {point.Cliente} </td></br>
+                                              <br><td>Destino: {point.Pais} </td></br>',
+                                               valueDecimals = 2)))%>%
+                                              
+  hc_chart(zoomType = "x", 
+           panKey = "ctrl", 
+           panning = TRUE)
+
+      
+        for(var in unique(liquidaciones()$master)){
+    
+    df <- liquidaciones()%>%
+      filter(master == var)%>%
+      mutate(dt = datetime_to_timestamp(Fecha))
+    
+    
+    hc <- hc_add_series(hc, df, 
+                   name = var, 
+                   yAxis = 0,
+                  hcaes(
+                   x = dt, 
+                   y = Precio),
+                   type = "scatter")
+  }
+  
+  hc
+
+    }else{
+      if(input$Tipo_p == "Descomposicion"){
+        if(input$Fruta_p == "Zarzamora"){ 
+        fruta  <- zar_usda$Close%>%
+            apply.weekly(mean)
+       }else{
+         if(input$Fruta_p == "Arandano"){
+        fruta <- ara_usda$Close%>%
+          apply.weekly(mean)
+         }
+      }
+    attr(fruta, 'frequency') <- 52
+    
+    fruta_dec <- decompose.xts(fruta$Close)
+    
+  highchart(type = "stock",
+            list(rangeSelector = list(
+                                    selected = 4)))%>%
+  hc_chart(backgroundColor = fondoplot)%>%
+  hc_yAxis_multiples(
+    create_yaxis(4, 
+                 height = c(1, 1, 1,1), 
+                 turnopposite = TRUE))%>%
+  hc_add_series(fruta_dec$x, yAxis = 0, name = "Observado")%>%
+  hc_add_series(fruta_dec$seasonal, yAxis = 1, name = "Seasonal", color = "rgba(236, 85, 226, .91)")%>%
+  hc_add_series(fruta_dec$trend, yAxis = 2, name = "Tendencia")%>%
+  hc_add_series(fruta_dec$random, yAxis = 3, name = "Aleatorio")%>%
+  hc_tooltip(crosshair = TRUE,
+             shared = TRUE,
+             split = FALSE)%>%
+  hc_xAxis(type = 'datetime',
+           dateTimeLabelFormats = list(day = '%e of %b'))
+    }else{
+      
+      if(input$Tipo_p == "Seasonal"){
+      
+       if(input$Fruta_p == "Zarzamora"){ 
+        fruta  <- data.frame(Fecha = index(zar_usda$Close), Close = zar_usda$Close)%>%
+          filter(Fecha >= as.Date("2013-09-01"))%>%
+          tiempos("Temporada")
+             
+        
+        
+       
+        
+       }else{
+         if(input$Fruta_p == "Arandano"){
+        fruta <- data.frame(Fecha = index(ara_usda$Close), Close = ara_usda$Close)%>%
+          filter(Fecha >= as.Date("2013-09-01"))%>%
+          tiempos("Temporada")
+          
+                 }
+         
+       }
+    
+   hc <- highchart(type  = "chart")%>%
+   hc_xAxis(categories = sort(unique(data.frame(Semana = factor(c(1:52), 
+                                                               levels = (c(34:85)%%52 + 1), 
+                                                               ordered = TRUE))[,1])),
+           crosshair = TRUE)%>%
+    hc_chart(zoomType = "xy", panKey = "ctrl", panning = TRUE, backgroundColor = fondoplot)%>%
+    hc_tooltip(crosshair = TRUE,
+               shared = TRUE,
+               split = FALSE)%>%
+   hc_plotOptions(line = list(tooltip = list( useHTML= TRUE,
+                                              headerFormat =  '<small>Semana:{point.key}</small><table>',
+                                              pointFormat = '<br><tr><td style="color: {point.color}"> {series.name} : </td></br>
+                                                             <br style="color: #000000"> {point.y} Cajas</br>' ,
+                                              valueDecimals = 2)))
+      
+    
+   for(var in sort(unique(fruta$Temporada))){
+     
+       x <- fruta%>%
+         filter(Temporada == var)%>%
+         tiempos("Semana")%>%
+         ddply(.(Semana), 
+               summarize,
+               Promedio = mean(Close, na.rm = TRUE))%>%
+         semanas(Campos = list(Promedio = NA))%>%
+         arrange(Semana)
+     
+     serie <- list(list(x = x$Semana, data = x$Promedio, name = var))
+     
+      hc <- hc_add_series_list(hc, serie) 
+     
+   }
+   
+   hc
+  
+    
+   
+   
+      }else{
+          if(input$Tipo_p == "Proyeccion"){
+            if(input$Fruta_p == "Zarzamora"){
+              fruta <-  data.frame(Fecha = index(zar_usda$Close), Close = zar_usda$Close)%>%
+  tiempos("Semanats")%>%
+  ddply(.(Semanats), summarize, Promedio = mean(Close), Fecha = min(Fecha))%>%
+  arrange(Semanats)
+              
+            }else{
+              if(input$Fruta_p == "Arandano"){
+                fruta <-  data.frame(Fecha = index(ara_usda$Close), Close = ara_usda$Close)%>%
+  tiempos("Semanats")%>%
+  ddply(.(Semanats), summarize, Promedio = mean(Close), Fecha = min(Fecha))%>%
+  arrange(Semanats)
+                
+              }
+            }
+          
+
+
+fruta_ts <- ts(fruta$Promedio, 
+               start = c(min(as.integer(format(fruta$Fecha, format = "%Y"))), 
+                         min(fruta$Semanats)),
+               frequency = 52)
+
+fit <- stlf(fruta_ts, method="ets")
+
+x <-forecast(fit,h=5)
+
+
+proyeccion <- data.frame(Semanats = max(fruta$Semanats)+ c(1:5),
+                         Promedio = x$mean, 
+                         Fecha = max(fruta$Fecha) +c(1:5)*7)%>%
+  mutate(dt = datetime_to_timestamp(Fecha))
+                         
+range_80 <- data.frame(low = x$lower[,1], high = x$upper[,1], Fecha = proyeccion$dt)
+range_95 <- data.frame(low = x$lower[,2], high = x$upper[,2], Fecha = proyeccion$dt)
+
+df <- tail(fruta,8)%>%
+  mutate(dt = datetime_to_timestamp(Fecha))
+
+hc <- highchart()%>%
+  hc_xAxis(type = "datetime", dateTimeLabelFormats = list(day = '%d of %b'))%>%
+  hc_colors(colors = c('#6CF', '#39F', '#06C', '#036', '#000'))%>%
+  hc_add_series(df, type = "line", hcaes(dt, Promedio), name = "Observado")%>%
+  hc_add_series(proyeccion, type = "line", hcaes(dt, Promedio), name = "ets", zIndex = 3)%>%
+    hc_add_series(range_95,  hcaes(x = Fecha), type = "arearange", name = "ets95%", color = "rgba(17,73, 132, .75)")%>%
+    hc_add_series(range_80,  hcaes(x = Fecha), type = "arearange", name = "ets80%", color = "rgba(63,141, 216, .75)")%>%
+      hc_plotOptions(line = list(tooltip = list( useHTML= TRUE,
+                                             shared = TRUE,
+                                             headerFormat =  '<small>Fecha: {point.key}</small><br>',
+                                             pointFormat = '<br><br><tr><td style="color: #000000; font-size: 15px">
+                                                            {series.name} : </td>
+                                             <td style="color: #000000"> {point.y} USD <br></td></br><br><br>' ,
+                                             valueDecimals = 2)),
+                     arearange = list(tooltip = list(valueDecimals = 2)))%>%
+                 
+  hc_tooltip(crosshair = TRUE,
+             shared = TRUE,
+             split = FALSE)
+  
+  hc
+            }
+        }
+    }
+  }
+    
+})
+```
+
+### Master
+```{r, context = "render"}
+
+highchartOutput("Precios_master")
+
+```
+
+###Tabla
+```{r}
+dataTableOutput("Prueba")
+```
