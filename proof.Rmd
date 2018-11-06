@@ -6,9 +6,11 @@ output:
     vertical_layout: fill
     logo: images/logo.JPG
     favicon: images/logo.JPG
+    css: css/cyborg.min.css
 runtime: shiny_prerendered
 
 ---
+
 
 ```{r, context = "setup"}
 library(flexdashboard)
@@ -20,12 +22,22 @@ library(rmarkdown)
 library(xts)
 library(forecast)
 source("funciones.R")
+
+
+
+
+
 ```
 
 
 ```{r context = "data", include=FALSE}
 
 #entradas de fruta
+
+
+
+
+#con <- dbConnect(odbc::odbc(), "SQLProyecto08", uid = "francisco", pwd = "Alpasa2017", encoding = "UTF8")
 
 entradas_fruta_a <- entradas.fruta(Campos = c("Fecha", "Clave_productor", "Clave_producto", "Aceptadas", "Clave_acopio", "Precio"))%>%
   collect()%>%
@@ -954,14 +966,17 @@ flujos_productor <-  reactive({
   
   if(is.null(input$Productor_m)){
     if(is.null(input$Acopio_m)){
-        x <-  rbind(
+        
+      x <-  rbind(
   entradas_material%>%
     select(Fecha, Clave_acopio, Clave_material, Cantidad),
   entregas_material%>%
     select(Fecha, Clave_acopio, Clave_material, Cantidad)%>%
     mutate(Cantidad = -Cantidad))%>%
     tiempos("Semana")%>%
-    get.material(Campos = c("Presentacion", "Tipo_material"))
+    get.material(Campos = c("Presentacion", "Tipo_material"))%>%
+        mutate(Presentacion = ifelse(Presentacion == "125G", "4OZ",
+                                 ifelse(Presentacion == "12X125G", "12X4OZ", Presentacion)))
     }
       
   if(!is.null(input$Acopio_m)){
@@ -974,7 +989,9 @@ flujos_productor <-  reactive({
     mutate(Cantidad = -Cantidad)%>%
     filter(Clave_acopio == input$Acopio_m))%>%
     tiempos("Semana")%>%
-    get.material(Campos = c("Presentacion", "Tipo_material"))
+    get.material(Campos = c("Presentacion", "Tipo_material"))%>%
+            mutate(Presentacion = ifelse(Presentacion == "125G", "4OZ",
+                                 ifelse(Presentacion == "12X125G", "12X4OZ", Presentacion)))
           
   }
   }else{
@@ -1025,6 +1042,8 @@ flujos_productor <-  reactive({
     
               #summarize
     rename(Concepto = Tipo)%>%
+    mutate(Presentacion = ifelse(Presentacion == "125G", "4OZ",
+                                 ifelse(Presentacion == "12X125G", "12X4OZ", Presentacion)))%>%
     ddply(.(Fecha, Concepto,Tipo_material, Presentacion), summarize, 
           Total = sum(Total))%>%
     tiempos(Campos = c("Semana"))
@@ -1211,7 +1230,7 @@ zar_full <- reactive({
   mutate(Fecha = as.Date(Fecha))%>%
   get.productos(c("Fruta", "Fraccion6oz"))%>%
   filter(Fruta == "ZAR CN")%>%
-  mutate(Especial = ifelse(Clave_producto %in% c(10201,12030), 0, 1))%>%
+  mutate(Especial = ifelse(Clave_producto %in% c("010201","120301"), 0, 1))%>%
   ddply(.(Fecha), summarize, Volumen = sum(Aceptadas*Fraccion6oz), Especiales = sum(Aceptadas*Fraccion6oz*Especial))%>%
   xts(order.by = .$Fecha)
 
@@ -1223,7 +1242,7 @@ rm(entradas_zar, zar_usda)
 #zar_full$SMA10 <- SMA(Cl(zar_full), 5)
 #10204
 precios6oz <- entradas_fruta_a%>%
-  filter(Clave_producto == 10201, Precio != 0)%>%
+  filter(Clave_producto == "010201", Precio != 0)%>%
   select(Fecha, Precio, Aceptadas, Clave_acopio)%>%
   get.acopio()%>%
   select(-Clave_acopio)%>%
@@ -1257,7 +1276,7 @@ rm(entradas_zar, ara_usda)
 #zar_full$SMA10 <- SMA(Cl(zar_full), 5)
 #10204
 precios6oz <- entradas_fruta_a%>%
-  filter(Clave_producto == 10204, Precio != 0)%>%
+  filter(Clave_producto == "010204", Precio != 0)%>%
   select(Fecha, Precio, Aceptadas, Clave_acopio)%>%
   get.acopio()%>%
   select(-Clave_acopio)%>%
@@ -1318,6 +1337,8 @@ liquidaciones <- reactive({
        
   }}
   
+  x <- x%>%
+    mutate(Fecha = as.Date(Fecha))
   
   x[!is.na(x$Precio),]%>%
     select(Fecha, Precio, Total, master, Producto, Folio, Cliente, Pais)

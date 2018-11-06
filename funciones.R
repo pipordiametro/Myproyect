@@ -1,23 +1,22 @@
 library(RODBC)
 library(plyr)
 library(dplyr)
-#library(DBI)
-#library(odbc)
-#library(pool)
 library(tidyr)
-
-
-inicio_temporada <- as.Date("2017-09-01")
+library(DBI)
+library(odbc)
+#library(pool)
 
 #pool <- dbPool(drv = odbc::odbc(),
- #              dsn = "SQLProyecto08",  uid = "francisco", pwd = "Alpasa2017")
+#               dsn = "SQLProyecto08",  uid = "francisco", pwd = "Alpasa2017")
 
-#con <- dbConnect(odbc::odbc(), "SQLProyecto08", uid = "francisco", pwd = "Alpasa2017", encoding = "UTF8")
+inicio_temporada <- as.Date("2018-09-01")
+con <- dbConnect(odbc::odbc(), "SQLProyecto08", uid = "francisco", pwd = "Alpasa2017")
 
-myfetch3 <- function(nombre,base = FALSE){
+
+myfetch <- function(nombre){
  # if(unname(Sys.info()["nodename"] == "DESKTOP-LQ3B302") ){
-#    con <- dbConnect(odbc::odbc(), "SQLProyecto08", uid = "francisco", pwd = "Alpasa2017")
-    var <- tbl(pool, nombre) 
+  #  con <- dbConnect(odbc::odbc(), "SQLProyecto08", uid = "francisco", pwd = "Alpasa2017")
+    var <- tbl(con, nombre) 
  #   odbcClose(con)
 #    write.csv(var, paste0("proyecto/", nombre, ".csv"))
  # }else{
@@ -29,7 +28,7 @@ myfetch3 <- function(nombre,base = FALSE){
 
 
 
-myfetch <- function(nombre){
+myfetch3 <- function(nombre){
   if(unname(Sys.info()["nodename"] == "DESKTOP-LQ3B302") ){
     var <-tbl(pool, nombre) 
   
@@ -50,7 +49,7 @@ myfetch2 <- function(nombre,base = FALSE){
     con <- odbcConnect(dsn = "SQLProyecto08", uid = "francisco", pwd = "Alpasa2017")
     var <- sqlFetch(con, nombre, as.is = TRUE) 
     odbcClose(con)
-    write.csv(var, paste0("proyecto/", nombre, ".csv"))
+   # write.csv(var, paste0("proyecto/", nombre, ".csv"))
     }else{
       var <- read.csv(paste0("proyecto/", nombre,".csv"))
    
@@ -724,14 +723,16 @@ precios.usda <- function(){
 
 get.cliente <- function(df){
   df <- left_join(df, myfetch("tbClientes")%>%
-    transmute(Clave_cliente = intCla_cli, Cliente = strNom_bre),
+    transmute(Clave_cliente = intCla_cli, Cliente = strNom_bre)%>%
+      collect(),
     by = "Clave_cliente")
     return(df)
 }
 
 get.destino <- function(df){
   df <- left_join(df, myfetch("tbDestinos")%>%
-                    transmute(Pais = strPai_s, Clave_destino= intCla_des),
+                    transmute(Pais = strPai_s, Clave_destino= intCla_des)%>%
+                    collect(),
                   by = "Clave_destino")
 }
 
@@ -778,6 +779,7 @@ liquid <- function(Campos = c( "Folio", "Fecha","Clave_producto", "Clave_fruta",
                               Pallet = intNum_pal,
                               Clave_producto = strCla_prod, Cantidad = intCan_tid)%>%
                     mutate(Fecha = as.Date(Fecha), Cantidad = as.integer(Cantidad))%>%
+                    collect()%>%
                     get.productos(Campos = c("Clave_fruta", "Clave_presentacion")),
                   
                   myfetch("tbPreciosEstimadosSalidas")%>%
@@ -785,11 +787,11 @@ liquid <- function(Campos = c( "Folio", "Fecha","Clave_producto", "Clave_fruta",
                     transmute(Folio = intNum_fol, Clave_presentacion = intCla_pre, Clave_fruta = intCla_fru ,
                               Precio_real = floPre_rea, Comision_aduanal = floCus_tom, 
                               Manejo = floHan_dliD, Handlio = floHan_dliO, Comision_ventas = floSal_es,
-                              Caja = floCaj_a, Frio = floFri_o, Mano_obra = floMan_obr, Energia = floEne_rgi), 
+                              Caja = floCaj_a, Frio = floFri_o, Mano_obra = floMan_obr, Energia = floEne_rgi)%>%
+                    collect(), 
                   by = c("Folio", "Clave_presentacion", "Clave_fruta"), suffix = c("_s","_p" ))%>%
     filter(Folio > 1672)%>%
     select(one_of(Campos))
-   
   
   
 return(df)
