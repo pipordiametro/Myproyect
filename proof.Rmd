@@ -19,30 +19,67 @@ library(highcharter)
 library(rmarkdown)
 library(xts)
 library(forecast)
+library(future)
+
 source("funciones.R")
 ```
 
 
 ```{r context = "data", include=FALSE}
-
+plan(multiprocess)
 #entradas de fruta
 
-entradas_fruta_a <- entradas.fruta(Campos = c("Fecha", "Clave_productor", "Clave_producto", "Aceptadas", "Clave_acopio", "Precio"))%>%
-  collect()%>%
-  mutate(Fecha = as.Date(Fecha))
+ entradas_fruta <- entradas.fruta(Campos = c("Fecha", "Clave_productor", "Clave_producto",
+                                     "Aceptadas", "Clave_acopio", "Precio",
+                                     "Semana_db"))%>%
+             filter(Fecha >= inicio_temporada)%>%
+             collect()%>%
+             mutate(Fecha = as.Date(Fecha))
 
-entradas_fruta <- entradas_fruta_a%>%
-  filter(Fecha >= inicio_temporada)
+
+entradas_fruta_a %<-% rbind(
+  read_rds("fruta_vieja.RDS"),
+  
+  entradas_fruta)
+           
+
+
+
+
+
+#Entradas totales
+entradas_totales %<-% ddply(entradas_fruta%>%
+                            select(Fecha, Clave_producto, Aceptadas, Clave_acopio)%>%
+                            collect()%>%
+                            tiempos("Semana"),
+                          .(Semana, Clave_producto, Clave_acopio), summarize, Total = sum(Aceptadas))
+
+
 
 #entradas de material
-entradas_material <- entradas.material()%>%
-  collect()
 
-entregas_material <- entregas.material(Campos = c( "Tipo_salida", "Clave_productor", 
+
+
+entradas_material %<-% rbind(
+  read_rds("ent_mat_viejo.RDS"),
+  
+  entradas.material()%>%
+    filter(Fecha >= inicio_temporada)%>%
+  collect())
+
+entregas_material %<-% rbind(
+  
+  read_rds("entregas_mat_viejo.RDS"),
+  
+  
+  entregas.material(Campos = c( "Tipo_salida", "Clave_productor", 
                                       "Fecha", "Cantidad", "Clave_material",
                                       "Tipo_receptor", "Clave_acopio"))%>%
-  collect()
+    filter(Fecha >= inicio_temporada)%>%
+  collect())
 
+zar_usda %<-% zar.usda() 
+ara_usda %<-% ara.usda()
 #productores activos
 productores <-   data.frame(Clave_productor = unique(entradas_fruta%>%
                                                        select(Clave_productor)%>%
@@ -79,16 +116,16 @@ presentaciones <-  merge(myfetch("tbProductos")%>%
 load.materiales(Campos = c("Material"))
 
 
-materiales <- setNames(materiales$Clave_material, materiales$Material)
+materiales %<-% setNames(materiales$Clave_material, materiales$Material)
 
 
 
-
+saldos <-  saldos.material()
 
 
 ```
 
-Producores {data-navmenu="PRODUCCION"}
+Productores {data-navmenu="PRODUCCION"}
 ==========================================================================
 
 
@@ -97,10 +134,16 @@ Inputs {.sidebar}
 
 ###Ajustes
 ```{r}
+
+# input presentacion
+
 selectInput("Presentacion", "Produccion en:",
             choices = presentaciones$Presentacion,
             selected = "12X6OZ")
 
+
+
+#input intervalo
 
 conditionalPanel(condition = "input.Acopio != null || input.Productor != null", 
               
@@ -116,12 +159,15 @@ conditionalPanel(condition = "input.Acopio != null || input.Productor != null",
 
 ###Filtros
 ```{r}
-
+#input acopio
 selectizeInput("Acopio", label = "Selecione un Acopio",
             choices = setNames(acopios$Clave_acopio, acopios$Acopio),
             options = list(placeholder = 'Seleccione  un Acopio', maxItems = 1), 
             multiple = TRUE)
 
+
+
+#input productor
 
 selectizeInput("Productor", label = "Productores",
             choices = paste(productores$Codigo, productores$Nombre_completo), 
@@ -147,7 +193,7 @@ dateRangeInput("Fechas", "Seleccione un rango", start = inicio_temporada, end = 
 ```
 
 ```{r, context = "server"}
-
+#input frutas
 
 output$Frutas<- renderUI({
   
@@ -174,11 +220,7 @@ selectizeInput("Producto", label = "Filtre un producto", options = list(placehol
 ###
 ```{r, context = "server"}
 
-entradas_totales <- ddply(entradas_fruta%>%
-                            select(Fecha, Clave_producto, Aceptadas, Clave_acopio)%>%
-                            collect()%>%
-                            tiempos("Semana"),
-                          .(Semana, Clave_producto, Clave_acopio), summarize, Total = sum(Aceptadas))
+
 
 
 peso <- reactive({merge(data.frame(Presentacion = input$Presentacion), presentaciones)})
@@ -352,7 +394,7 @@ entradas_productor()%>%
 
 ```{r, context = "server"}
 
-
+# Nombre
 output$nombre <- renderValueBox(
   if(is.null(input$Acopio) & is.null(input$Productor)){
 valueBox("Produccion Total")
@@ -382,7 +424,7 @@ output$Acumulado <- renderValueBox(valueBox(stats()$Acumulado))
 
 fondoplot <- "transparent"
 areacolor <- "rgba(6,144,207,.8)"
-#####Produccion
+#Plot Produccion
 
 output$Produccion <- renderHighchart(
  
@@ -1117,8 +1159,8 @@ highchartOutput("Grafico_m")
 ```{r, context = "server"}
 output$Saldos <- renderDataTable(
   if(!is.null(input$Productor_m)){
-    datatable(flujos_productor()%>%
-              ddply(.(Tipo_material, Presentacion), summarize, Total = sum(Total)),
+    datatable(saldos.material(Clave = str_match(input$Productor_m,
+                                                "^[[0-9]]{0,3}")[,1]),
               rownames = FALSE,
               style = "bootstrap",
               class = 'display compact',
@@ -1131,18 +1173,18 @@ output$Saldos <- renderDataTable(
                   ))))
               
   }else{
-    datatable(flujos_productor()%>%
-              ddply(.(Tipo_material, Presentacion), summarize, Total = sum(Cantidad)),
+    datatable(saldos,
               rownames = FALSE,
-              style = "bootstrap",
-              class = 'display compact',
-              options = list(
-                pageLength = 9,
-                autoWidth = TRUE,
-                columnDefs=list(list(
-                  className = 'dt-center',
-                  targets = list(0,1,2)
-                  ))))
+             style = "bootstrap",
+             class = "display compact",
+             filter = 'top',
+             options = list(
+               pageLength = 10, 
+               scrollX = TRUE,
+               dom = 'Bfrtip',
+               buttons = c('copy', 'excel', 'pdf')),
+             extensions = 'Buttons')%>%
+  formatStyle(2:14, color = styleInterval(-1, c("red", "black")))
   }
 )
 ```
@@ -1200,8 +1242,7 @@ Grafico {.tabset}
 
 observeEvent(input$Update, get.precios())
   
-zar_usda <- zar.usda() 
-ara_usda <- ara.usda()
+
 
 zar_full <- reactive({
   
@@ -1211,19 +1252,19 @@ zar_full <- reactive({
   mutate(Fecha = as.Date(Fecha))%>%
   get.productos(c("Fruta", "Fraccion6oz"))%>%
   filter(Fruta == "ZAR CN")%>%
-  mutate(Especial = ifelse(Clave_producto %in% c(10201,12030), 0, 1))%>%
+  mutate(Especial = ifelse(Clave_producto %in% c("010201","120301"), 0, 1))%>%
   ddply(.(Fecha), summarize, Volumen = sum(Aceptadas*Fraccion6oz), Especiales = sum(Aceptadas*Fraccion6oz*Especial))%>%
   xts(order.by = .$Fecha)
 
 entradas_zar <- entradas_zar[,-1]
 
-zar_full <- merge(zar_usda["20130929/"], entradas_zar, fill = 0)
+zar_full <- merge(zar_usda["20130929/"], entradas_zar, fill = 0, all.x = TRUE)
 
 rm(entradas_zar, zar_usda)
 #zar_full$SMA10 <- SMA(Cl(zar_full), 5)
 #10204
 precios6oz <- entradas_fruta_a%>%
-  filter(Clave_producto == 10201, Precio != 0)%>%
+  filter(Clave_producto %in% c("010201"), Precio != 0)%>%
   select(Fecha, Precio, Aceptadas, Clave_acopio)%>%
   get.acopio()%>%
   select(-Clave_acopio)%>%
@@ -1233,31 +1274,31 @@ precios6oz <- entradas_fruta_a%>%
   xts(order.by = .$Fecha)
 
 
- merge(zar_full, precios6oz[,-1])
+ merge(zar_full, precios6oz[,-1], all.x = TRUE)
 
 
   }else{
-     
-
-  ara_usda <- ara.usda()
     
-  entradas_zar <- entradas_fruta_a%>%
+    if(input$Fruta_p == "Arandano"){
+      
+        
+  entradas_ara <- entradas_fruta_a%>%
   mutate(Fecha = as.Date(Fecha))%>%
   get.productos(c("Fruta", "Fraccion6oz"))%>%
   filter(Fruta == "ARA BER")%>%
-  mutate(Especial = ifelse(Clave_producto %in% c(10201,12030), 0, 1))%>%
+  mutate(Especial = ifelse(Clave_producto %in% c("010204"), 0, 1))%>%
   ddply(.(Fecha), summarize, Volumen = sum(Aceptadas*Fraccion6oz), Especiales = sum(Aceptadas*Fraccion6oz*Especial))%>%
   xts(order.by = .$Fecha)
 
-entradas_zar <- entradas_zar[,-1]
+entradas_ara <- entradas_ara[,-1]
 
-zar_full <- merge(ara_usda, entradas_zar, fill = 0)
+ara_full <- merge(ara_usda, entradas_ara, fill = 0, all.x = TRUE)
 
-rm(entradas_zar, ara_usda)
+rm(entradas_ara, ara_usda)
 #zar_full$SMA10 <- SMA(Cl(zar_full), 5)
 #10204
 precios6oz <- entradas_fruta_a%>%
-  filter(Clave_producto == 10204, Precio != 0)%>%
+  filter(Clave_producto == "010204", Precio != 0)%>%
   select(Fecha, Precio, Aceptadas, Clave_acopio)%>%
   get.acopio()%>%
   select(-Clave_acopio)%>%
@@ -1267,7 +1308,12 @@ precios6oz <- entradas_fruta_a%>%
   xts(order.by = .$Fecha)
 
 
- merge(zar_full, precios6oz[,-1])
+ merge(ara_full, precios6oz[,-1], all.x = TRUE)
+    }
+     
+
+  
+  
 
   }
 })
@@ -1324,13 +1370,7 @@ liquidaciones <- reactive({
                 
 })
 
-fruta <- reactive({
-  if(input$Fruta_p == "Zarzamora"){
-    zar_usda
-  }else{
-    ara_usda
-  }
-})              
+              
 
 colores <- c( '#4363d8','#e6194b', '#f58231', '#3cb44b',  '#911eb4', '#fabebe', '#46f0f0', '#f032e6', '#ffe119', '#bcf60c',  '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080', '#ffffff', '#000000')
 
@@ -1445,7 +1485,7 @@ output$Precios_master <- renderHighchart(
   
   hc
   
-
+# Monitor puntos
 
   }else{
     if(input$Tipo_p == "Monitor Puntos"){
@@ -1646,34 +1686,50 @@ output$Precios_master <- renderHighchart(
    hc
   
     
-   
+   #Proyeccion
    
       }else{
           if(input$Tipo_p == "Proyeccion"){
             if(input$Fruta_p == "Zarzamora"){
-              fruta <-  data.frame(Fecha = index(zar_usda$Close), Close = zar_usda$Close)%>%
-  tiempos("Semanats")%>%
-  ddply(.(Semanats), summarize, Promedio = mean(Close), Fecha = min(Fecha))%>%
-  arrange(Semanats)
               
-            }else{
+              fit <- read_rds("zar_fit.RDS")
+
+    fruta <-  data.frame(Fecha = index(zar_usda$Close), Close = zar_usda$Close)%>%
+      tiempos("Semanats")%>%
+      ddply(.(Semanats), summarize, Promedio = mean(Close), Fecha = min(Fecha))%>%
+      arrange(Semanats)
+    
+    
+    fruta_ts <- ts(fruta$Promedio, 
+                   start = c(min(as.integer(format(fruta$Fecha, 
+                                                   format = "%Y"))), 
+                             min(fruta$Semanats)),
+                   frequency = 52)
+              
+  
+            
+    
+    
+    }else{
               if(input$Fruta_p == "Arandano"){
-                fruta <-  data.frame(Fecha = index(ara_usda$Close), Close = ara_usda$Close)%>%
-  tiempos("Semanats")%>%
-  ddply(.(Semanats), summarize, Promedio = mean(Close), Fecha = min(Fecha))%>%
-  arrange(Semanats)
+                
+                fit <- read_rds("ara_fit.RDS")
+                
+fruta <-  data.frame(Fecha = index(ara_usda$Close), Close = ara_usda$Close)%>%
+      tiempos("Semanats")%>%
+      ddply(.(Semanats), summarize, Promedio = mean(Close), Fecha = min(Fecha))%>%
+      arrange(Semanats)
+    
+    fruta_ts <- ts(fruta$Promedio, 
+                   start = c(min(as.integer(format(fruta$Fecha, 
+                                                   format = "%Y"))), 
+                             min(fruta$Semanats)),
+                   frequency = 52)
                 
               }
             }
-          
+        
 
-
-fruta_ts <- ts(fruta$Promedio, 
-               start = c(min(as.integer(format(fruta$Fecha, format = "%Y"))), 
-                         min(fruta$Semanats)),
-               frequency = 52)
-
-fit <- stlf(fruta_ts, method="ets")
 
 x <-forecast(fit,h=5)
 
@@ -1716,6 +1772,11 @@ hc <- highchart()%>%
   }
     
 })
+
+
+
+output$Prueba <- renderDataTable({ara_usda%>%
+                                   datatable()})
 ```
 
 ### Master
@@ -1728,4 +1789,435 @@ highchartOutput("Precios_master")
 ###Tabla
 ```{r}
 dataTableOutput("Prueba")
+```
+
+
+
+
+
+
+
+
+
+
+```{r context = "server", include=FALSE}
+
+productores_p <-  data.frame(Clave_productor = 
+                              unique(load.proyecciones(campos = c("Clave_productor", "Semana_db", "Year_db", "Proyeccion"))%>%
+  filter(Year_db %in% c(2018,2019))%>%
+  arrange(Semana_db, Year_db)%>%
+  filter(!(Year_db == 2018 & Semana_db >52) & !(Year_db == 2019 & Semana_db > 34))%>%
+  filter(Proyeccion != 0)%>%
+  select(Clave_productor)))%>%
+  nombres.productores()%>%
+  collect()%>%
+ mutate(Nombre_completo = paste0(Apellido_paterno, " ",  Apellido_materno, " ",  Nombre))%>%
+    rename(Codigo = Clave_productor)%>%
+  select(Codigo, Nombre_completo)
+
+
+
+
+proy_pre <- reactive({
+
+
+if (is.null(input$Productor_proy)){
+  
+    load.proyecciones()%>%
+    filter(Clave_productor %in% productores_p$Codigo)%>%
+  filter(Year_db %in% c(2018,2019))%>%
+  arrange(Semana_db, Year_db)%>%
+  filter(!(Year_db == 2018 & Semana_db >52) & !(Year_db == 2019 & Semana_db > 34))%>%
+  filter(Proyeccion != 0)%>%
+    collect()
+}else{
+  
+
+
+
+    load.proyecciones()%>%
+    filter(Clave_productor == str_match(input$Productor_proy, "^[[0-9]]{0,3}")[,1])%>%
+  filter(Year_db %in% c(2018,2019))%>%
+  arrange(Semana_db, Year_db)%>%
+  filter(!(Year_db == 2018 & Semana_db >52) & !(Year_db == 2019 & Semana_db > 34))%>%
+  filter(Proyeccion != 0)%>%
+    collect()   }})
+
+datos_proy <- reactive({
+  
+  
+  proy <- proy_pre()%>%
+    ddply(.( Year_db, Semana_db),
+          summarize, Proyeccion = sum(Proyeccion))%>%
+   # select(-Clave_productor)%>%
+    mutate(Ayuda = 1)%>%
+  mutate(Nos = cumsum(Ayuda),
+         Acumuladas_py = cumsum((Proyeccion)),
+         Lim_pag = floor(max(Nos)*3/4))
+  
+  entradas <- if(is.null(input$Productor_proy)){
+    
+    entradas_fruta%>%
+    filter(Clave_productor %in% productores_p$Codigo)%>%
+    collect()
+    
+  }else{
+    entradas_fruta%>%
+    filter(Clave_productor  == 
+                   str_match(input$Productor_proy, "^[[0-9]]{0,3}")[,1])%>%
+    collect()} 
+  
+  
+  x <-  merge(proy, 
+              
+              
+              if(length(data.frame(entradas)[,1]) == 0){
+                data.frame(Year_db = proy$Year_db , Semana_db = proy$Semana_db, Real = 0, Entregas = 0, Minimo = 0, Maximo = 0, Promedio = 0)
+              }else{
+                
+                
+                entradas%>%
+                  mutate(Year_db = format(Fecha, format = "%Y"))%>%
+          ddply(.(Fecha,  Year_db, Semana_db, Clave_producto),
+                summarize, Real = sum(Aceptadas))%>%
+                  get.productos("Fraccion6oz")%>%
+                  mutate(Real = Real*Fraccion6oz)%>%
+                  ddply(.(Fecha, Year_db, Semana_db),
+                        summarize, Real = sum(Real))%>%
+                  group_by(Year_db, Semana_db)%>%
+                  summarize(
+                        Entregas = n(),
+                        Minimo = min(Real),
+                        Maximo = max(Real),
+                        Promedio = round(sum(Real)/7, 2),
+                        Real = sum(Real))%>%
+                  ungroup()},
+          by = c("Year_db", "Semana_db"), 
+          all = TRUE)
+ 
+ x[is.na(x)] <- 0
+ 
+ x
+})
+
+
+this_week <- format(Sys.Date() + 9, format = "%U")
+```
+
+PROYECCIONES
+==========================================================================
+
+Inputs {.sidebar}
+--------------------------------------------------------------------------------
+
+```{r}
+productores_p <-  data.frame(Clave_productor = 
+                              unique(load.proyecciones(campos = c("Clave_productor", "Semana_db", "Year_db", "Proyeccion"))%>%
+  filter(Year_db %in% c(2018,2019))%>%
+  arrange(Semana_db, Year_db)%>%
+  filter(!(Year_db == 2018 & Semana_db >52) & !(Year_db == 2019 & Semana_db > 34))%>%
+  filter(Proyeccion != 0)%>%
+  select(Clave_productor)))%>%
+  nombres.productores()%>%
+  collect()%>%
+ mutate(Nombre_completo = paste0(Apellido_paterno, " ",  Apellido_materno, " ",  Nombre))%>%
+    rename(Codigo = Clave_productor)%>%
+  select(Codigo, Nombre_completo)
+
+
+
+
+selectizeInput("Productor_proy", label = "Productores",
+            choices = sort(paste(productores_p$Codigo, productores_p$Nombre_completo)), 
+            options = list(placeholder = 'Seleccione un productor', maxItems = 1), multiple = TRUE)
+```
+
+Nombre
+--------------------------------------------------------------------------
+
+
+###Nombre
+```{r, context = "server" }
+
+output$Nombre_proy <- renderValueBox(
+
+    valueBox(input$Productor_proy)
+
+)
+```
+
+```{r, context = "render" }
+
+valueBoxOutput("Nombre_proy")
+
+```
+
+STATS 
+--------------------------------------------------------------------------
+
+```{r, context = "server" }
+
+limite_pago <- reactive({
+  
+  lim <- unique(datos_proy()$Lim_pag)
+  
+  datos_proy()%>%
+    filter(Nos == lim)%>%
+    select(Semana_db)
+  
+})
+
+
+
+output$Limite <- renderValueBox(
+
+    valueBox(unique(limite_pago()))
+
+)
+```
+### Semana Limite
+```{r, context = "render" }
+
+valueBoxOutput("Limite")
+
+```
+
+
+```{r, context = "server" }
+
+ratio <- reactive({
+  
+  
+  
+  datos_proy()%>%
+    filter(Semana_db <= this_week)%>%
+    summarize(Ratio = round(sum(Real)/sum(Proyeccion), 2))
+  
+})
+
+output$Ratio_actual <- renderGauge(
+  gauge(resumen()[resumen()$Semana_db == this_week,]$Real/resumen()[resumen()$Semana_db == this_week,]$Proyeccion,
+        min = 0, 
+        max = max(resumen()[resumen()$Semana_db == this_week,]$Real/resumen()[resumen()$Semana_db == this_week,]$Proyeccion, 1), symbol = '%', gaugeSectors(
+  success = c(.95, 10), warning = c(.8, .94), danger = c(0, .79)
+)))
+```
+
+
+### Proporcion Actual
+```{r, context = "render" }
+
+gaugeOutput("Ratio_actual")
+
+```
+
+
+
+```{r, context = "server" }
+
+
+
+
+
+output$Ratio <- renderGauge(
+  gauge(round(ratio()$Ratio, 2), min = 0, max = max(ratio()$Ratio, 1), symbol = '%', gaugeSectors(
+  success = c(.95, 10), warning = c(.80, .94), danger = c(0, .79)
+)))
+```
+### Proporcion Acumulada
+```{r, context = "render" }
+
+gaugeOutput("Ratio")
+
+```
+
+
+
+
+
+VISUALIZACION{.tabset}
+-----------------------------------------------------------------------------
+
+###Datos
+```{r, context = "server"}
+
+prc <- reactive({
+  datos_proy()%>%
+  filter(Nos <= Lim_pag)%>%
+  mutate(Cum_aux = sum(Proyeccion),
+         Porcentaje = round(Proyeccion / Cum_aux, 3))%>%
+  select(Year_db, Semana_db, Porcentaje)
+})
+
+
+resumen <- reactive({
+  merge(datos_proy(),
+        prc(), 
+        by = c("Year_db", "Semana_db"),
+        all = TRUE )%>%
+          select(Semana_db, Proyeccion, Real, Entregas, 
+                 Minimo, Maximo, Promedio, Porcentaje)
+})
+
+
+output$Proyecciones_df <- renderDataTable(
+  datatable(resumen(), rownames = FALSE,
+             style = "bootstrap",
+             class = "display compact",
+            # filter = 'top',
+             options = list(
+               pageLength = 10, 
+               scrollX = TRUE),
+            selection = list(target = "row",
+                             selected = row.names(resumen()[resumen()$Semana_db == this_week,])))%>%
+    formatStyle( "Semana_db", target = "row", 
+                 backgroundColor = styleEqual(
+                   c(this_week,53), 
+                   c('gray', "red"))))
+
+
+
+```
+
+
+```{r}
+dataTableOutput("Proyecciones_df")
+```
+
+### Grafico
+
+```{r context = "server"}
+output$Grafico_proy <- renderHighchart(
+
+ hc <- highchart()%>%
+    hc_chart(type = "area")%>%
+    hc_chart(zoomType = "xy", panKey = "ctrl", panning = TRUE)%>%
+    hc_xAxis(list(type = "category", 
+                  categories =  sort(unique(data.frame(Semana = factor(c(1:52), 
+                                                                       levels = (c(34:85)%%52 + 1), 
+                                                                       ordered = TRUE))[,1])),
+                  min =  min(as.numeric(resumen()[sum(c(resumen()$Proyeccion,
+                                                        resumen()$Real), na.rm = TRUE)  != 0,]$Semana_db))-3, 
+                  max = max(as.numeric(resumen()[sum(c(resumen()$Proyeccion,
+                                                        resumen()$Real), na.rm = TRUE)  != 0,]$Semana_db))))%>% 
+            hc_tooltip(crosshair = TRUE,
+             shared = TRUE,
+             split = FALSE)%>%
+   hc_add_series_semana( df = resumen(), semana = "Semana_db", data = "Proyeccion", name = "Proyeccion")%>%
+    hc_add_series_semana( df = resumen(), semana = "Semana_db", data = "Real", name = "Real")%>%
+   hc_plotOptions(area = list(tooltip = list(shared = true,
+                                               split = true,
+                                               useHTML= true,
+                                               headerFormat =  '<small style="color: {point.color}">Semana:{point.key}</small><table>',
+                                               pointFormat = '<br><tr><td style="color: {point.color}"> {series.name}: </td></br>
+                                                              <br style="color: #000000">{point.y} Cajas</br>' ,
+                                               valueDecimals = 2)))
+  
+  
+
+
+)
+```
+
+
+```{r context = "render"}
+highchartOutput("Grafico_proy")
+```
+
+###Desgloce
+
+```{r context = "server"}
+output$Desgloce <-  renderDataTable(datatable(proy_pre()%>%
+                                                arrange(Semana_db),rownames = FALSE,
+             style = "bootstrap",
+             class = "display compact",
+            # filter = 'top',
+             options = list(
+               pageLength = 10, 
+               scrollX = TRUE),
+            selection = list(target = "row",
+                             selected = row.names(resumen()[resumen()$Semana_db == this_week,])))%>%
+    formatStyle( "Semana_db", target = "row", 
+                 backgroundColor = styleEqual(
+                   c(this_week,53), 
+                   c('gray', "red"))))
+
+```
+
+```{r}
+dataTableOutput("Desgloce")
+
+```
+
+
+###Historico
+
+```{r, context = "server"}
+
+historico_proy <- reactive({
+ 
+  x <- entradas_fruta_a%>%
+      get.productos(Campos = c("Fraccion6oz"))
+  
+  
+  
+  if(!is.null(input$Productor_proy)){
+    x <- x%>%filter(Clave_productor == str_match(input$Productor_proy, "^[[0-9]]{0,3}")[,1])
+    
+  }else{x <- x%>%filter(Clave_productor %in% productores_p$Codigo)}
+    
+    
+  
+    
+  
+    x%>%
+      tiempos(Campos = c("Semana", "Temporada"))%>%
+      ddply(.(Semana, Temporada),
+            summarize, 
+            Total = sum(Aceptadas*Fraccion6oz, na.rm = TRUE ))
+      
+})
+
+
+  
+output$Historico_proy <- renderHighchart({
+  
+  hc <- highchart(type  = "chart")%>%
+  hc_xAxis(categories = sort(unique(data.frame(Semana = factor(c(1:52), 
+                                                               levels = (c(34:85)%%52 + 1), 
+                                                               ordered = TRUE))[,1])),
+           crosshair = TRUE)%>%
+    hc_chart(zoomType = "xy", panKey = "ctrl", panning = TRUE, backgroundColor = fondoplot)%>%
+    hc_tooltip(crosshair = TRUE,
+               shared = TRUE,
+               split = FALSE)%>%
+   hc_plotOptions(line = list(tooltip = list( useHTML= TRUE,
+                                              headerFormat =  '<small>Semana:{point.key}</small><table>',
+                                              pointFormat = '<br><tr><td style="color: {point.color}"> {series.name} : </td></br>
+                                                             <br style="color: #000000"> {point.y} Cajas</br>' ,
+                                              valueDecimals = 2)))%>%
+    hc_add_series_semana( df = resumen(), semana = "Semana_db", data = "Proyeccion", name = "Proyeccion", type = "area")
+   
+
+for(var in sort(unique(historico_proy()$Temporada))){
+  
+  df <- historico_proy()%>%
+    filter(Temporada == var)%>%
+    semanas(Campos = list(Total = 0))%>%
+    arrange(Semana)
+    
+serie <- list(list(x = df$Semana, data = df$Total, name = var)) 
+
+hc <- hc_add_series_list(hc,serie)
+  
+}
+
+hc
+})
+
+
+```
+
+```{r}
+highchartOutput("Historico_proy")
 ```
