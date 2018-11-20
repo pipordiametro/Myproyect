@@ -14,9 +14,12 @@ inicio_temporada <- as.Date("2018-09-01")
 #pool <- dbPool(drv = odbc::odbc(),
  #              dsn = "SQLProyecto08",  uid = "francisco", pwd = "Alpasa2017")
 
-#con <- dbConnect(odbc::odbc(), "SQLProyecto08", uid = "francisco", pwd = "Alpasa2017", encoding = "UTF8")
 
-myfetch3 <- function(nombre,base = FALSE){
+con <- DBI::dbConnect(odbc::odbc(), Driver = "PostgreSQL Unicode(x64)", 
+                      Server = "localhost", Database = "reyes", UID = "postgres", 
+                      PWD = "Cyan98150896", Port = 5432)
+
+myfetch <- function(nombre,base = FALSE){
  # if(unname(Sys.info()["nodename"] == "DESKTOP-LQ3B302") ){
 #    con <- dbConnect(odbc::odbc(), "SQLProyecto08", uid = "francisco", pwd = "Alpasa2017")
     var <- tbl(con, nombre) 
@@ -31,7 +34,7 @@ myfetch3 <- function(nombre,base = FALSE){
 
 
 
-myfetch <- function(nombre){
+myfetch3 <- function(nombre){
   if(unname(Sys.info()["nodename"] == "DESKTOP-LQ3B302") ){
     var <-tbl(pool, nombre) 
   
@@ -391,7 +394,7 @@ tiempos <- function(df, Campos = c("Semana", "Semanats", "Year", "Temporada")){
   
   nuevas <- entradas.fruta(Campos = c("Fecha", "Semana_db"))%>%
     collect()%>%
-    filter(Fecha > max(weeks$Fecha))
+    filter(as.Date(Fecha) > max(weeks$Fecha))
   
   weeks <- rbind(weeks, nuevas)
   
@@ -579,7 +582,7 @@ entradas.fruta <- function(Campos = c("Id_entradas","Idb_entradas", "Nota", "Fol
                           by = "intNum_reg", suffix = c("h","b"))%>%
     filter(strCan_celb == "NO")%>%
     transmute(Id_entradas = intNum_reg, Idb_entradas = intNum_regA, Folio = intNum_fol, Nota = intNum_not, 
-              Fecha = as.Date(fecFec_not), Semana_db = intNum_sem,
+              Fecha = fecFec_not, Semana_db = intNum_sem,
               Year_db = intNum_ano, Clave_productor = intCla_pro, 
               Clave_acopio = intCen_aco, Cantidad = as.integer(intCan_tid), Rechazadas = as.integer(intCan_rec), Clave_producto =  intCla_prod,
               Pallet = intNum_pal, Precio = as.numeric(floPre_uni), Numero_pago = intNum_pag, Pagado = strPag_ado)%>%
@@ -607,7 +610,7 @@ entradas.material <- function(){
    left_join(myfetch("tbAlmEnt"),myfetch("tbAlmEntReg"), 
                              by = "intNum_reg", all.x = TRUE, suffix = c("h", "b"))%>%
     filter(strCan_celb == "NO")%>%
-    transmute(Clave_acopio = intCla_alm, Tipo_entrada =  strTip_ent, Fecha = as.Date(fecCre_acih), 
+    transmute(Clave_acopio = intCla_alm, Tipo_entrada =  strTip_ent, Fecha = fecCre_acih, 
               Tipo_proveedor = strTip_prov, Cantidad = intCan_tid , Clave_material = intCla_mat,
               Clave_proveedor = intCla_prov, Factura = strNum_fac, Observaciones = strObs_erv
               )%>%
@@ -621,11 +624,11 @@ entradas.material <- function(){
 entregas.material <- function(Campos = c("Clave_acopio", "Tipo_salida", "Clave_productor", "Fecha", "Cantidad",
                                          "Clave_material", "Tipo_receptor" )){
   
-  entregas_material <- left_join(myfetch("tbAlmSal"),myfetch("tbAlmsalReg"), 
+  entregas_material <- left_join(myfetch("tbAlmSal"),myfetch("tbAlmSalReg"), 
                              by = "intNum_reg", all.x = TRUE, suffix = c("h", "b"))%>%
     filter(strCan_celb == "NO")%>%
     transmute(Clave_acopio = intCla_alm, Tipo_salida = strTip_sal, Clave_productor = intCla_pro,
-              Fecha = as.Date(fecCre_acih), Cantidad = intCan_tid, Clave_material = intCla_mat, 
+              Fecha = fecCre_acih, Cantidad = intCan_tid, Clave_material = intCla_mat, 
               Tipo_receptor = strTip_pro )%>%
     filter(Fecha > inicio_temporada)%>%
     select(one_of(Campos))
@@ -1074,72 +1077,190 @@ mymerge <- function(x){
   df
 }
 
-saldos.material <- function(Clave = NULL, Desde = inicio_temporada, Hasta = Sys.Date()){
-  
-  precios <- readRDS("precios_ref.RDS")
-  
-  entradas_fruta  <-   entradas.fruta(Campos = c("Fecha", "Clave_productor", "Clave_producto", "Aceptadas"))%>%
-    filter(Fecha > inicio_temporada, Fecha < Hasta )%>%
-    mutate(Cantidad = Aceptadas)
-  
-  prestamos <- entregas.material(Campos = c("Tipo_salida", "Clave_productor", 
-                                            "Fecha", "Cantidad", "Clave_material",
-                                            "Tipo_receptor", "Clave_acopio"))%>%
-    filter(Fecha > inicio_temporada, Fecha < Hasta)%>%
-    filter(Tipo_receptor == "PRODUCTOR")%>%
-    select(Fecha, Clave_productor, Clave_material, Cantidad)
+saldos.material2 <- function(Clave = NULL, Desde = inicio_temporada, Hasta = Sys.Date()){
   
   
-  devoluciones <- entradas.material()%>%
-    filter(Tipo_proveedor == "PRODUCTOR")%>%
-    filter(Fecha > inicio_temporada, Fecha < Hasta)%>%
-    rename(Clave_productor = Clave_proveedor)
-    
-    sumas <- function(Clave){
-      datos <- list(
-        
+  sumas <- function(Clave){
+    datos <- list(
+      
       
       prestamos = prestamos%>%
         filter(Clave_productor == Clave)%>%
+        collect()%>%
         resumen.clave_material()%>%
         mutate(Prestamos = Total)%>%
         select(-Total),
       
       entradas_fruta = entradas_fruta%>%
         filter(Clave_productor == Clave)%>%
+        collect()%>%
+        rename(Cantidad = Aceptadas)%>%
         resumen.clave_producto()%>%
         mutate(Recepcion = Total)%>%
         select(-Total),
       
-      devoluciones = devoluciones%>%
-        filter(Clave_productor == Clave)%>%
-        resumen.clave_material()%>%
-        mutate(Devoluciones = Total)%>%
-        select(-Total))
-      
-      x <-  mymerge(datos)%>%
-         filter(!Presentacion %in% c("2LB", "6X2LB"))%>%
-       mutate(Saldo = Prestamos - Recepcion - Devoluciones)%>%
-         merge(precios, by = "Presentacion", all = TRUE)%>%
-         mutate(Imp = Saldo * Precio)
-      
-      x[is.na(x)] <- 0
-         
-      x
-    }
+      devoluciones = {
+        
+        
+        dev <-   devoluciones%>%
+          filter(Clave_productor == Clave)%>%
+          collect()
+        
+        if(length(data.frame(dev)[,1]) == 0){
+          
+          data.frame(Presentacion = NA, Devoluciones = NA)
+          
+        }else{
+          
+          dev%>%
+            resumen.clave_material()%>%
+            mutate(Devoluciones = Total)%>%
+            select(-Total)
+        }
+      })
+    
+    x <-  mymerge(datos)%>%
+      filter(!Presentacion %in% c("2LB", "6X2LB"))%>%
+      mutate(Saldo = Prestamos - Recepcion - Devoluciones)%>%
+      merge(precios, by = "Presentacion", all = TRUE)%>%
+      mutate(Imp = Saldo * Precio)
+    
+    x[is.na(x)] <- 0
+    
+    x
+  }
   
+  
+  
+  precios <- readRDS("precios_ref.RDS")
   
   if(!is.null(Clave)){
     
+    
+    if(!"entradas_fruta" %in% ls()){
+      entradas_fruta  <-   entradas.fruta(Campos = c("Fecha", "Clave_productor", "Clave_producto", "Aceptadas"))%>%
+        filter(Clave_productor == Clave, 
+               Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        mutate(Cantidad = Aceptadas)%>%
+        collect()
+    }else{
+      entradas_fruta  <-entradas_fruta%>%
+        filter(Clave_productor == Clave, 
+               Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        mutate(Cantidad = Aceptadas)%>%
+        collect()
+    }
+    if(!"entregas_material" %in% ls()){
+      prestamos <- entregas.material(Campos = c("Tipo_salida", "Clave_productor", 
+                                                "Fecha", "Cantidad", "Clave_material",
+                                                "Tipo_receptor", "Clave_acopio"))%>%
+        filter(Clave_productor == Clave, 
+               Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        filter(Tipo_receptor == "PRODUCTOR")%>%
+        select(Fecha, Clave_productor, Clave_material, Cantidad)%>%
+        collect()
+      
+      
+    }else{
+      prestamos <- entregas_material%>%
+        filter(Clave_productor == Clave, 
+               Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        filter(Tipo_receptor == "PRODUCTOR")%>%
+        select(Fecha, Clave_productor, Clave_material, Cantidad)%>%
+        collect()
+    }
+    
+    if(!"entradas_material" %in% ls()){
+      devoluciones <- entradas.material()%>%
+        filter(Tipo_proveedor == "PRODUCTOR")%>%
+        rename(Clave_productor = Clave_proveedor)%>%
+        filter(Clave_productor == Clave, 
+               Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        collect()
+      
+    }else{
+      devoluciones <- entradas_material%>%
+        filter(Tipo_proveedor == "PRODUCTOR")%>%
+        rename(Clave_productor = Clave_proveedor)%>%
+        filter(Clave_productor == Clave, 
+               Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        collect()
+    }
     return(sumas(Clave)%>%
              select(-Precio, -Imp))
     
-     
   }else{
+    
+    
+    if(!"entradas_fruta" %in% ls()){
+      entradas_fruta  <-   entradas.fruta(Campos = c("Fecha", "Clave_productor", "Clave_producto", "Aceptadas"))%>%
+        filter(Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        mutate(Cantidad = Aceptadas)%>%
+        collect()
+    }else{
+      entradas_fruta  <-entradas_fruta%>%
+        filter(Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        mutate(Cantidad = Aceptadas)%>%
+        collect()
+    }
+    if(!"entregas_material" %in% ls()){
+      prestamos <- entregas.material(Campos = c("Tipo_salida", "Clave_productor", 
+                                                "Fecha", "Cantidad", "Clave_material",
+                                                "Tipo_receptor", "Clave_acopio"))%>%
+        filter(Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        filter(Tipo_receptor == "PRODUCTOR")%>%
+        select(Fecha, Clave_productor, Clave_material, Cantidad)%>%
+        collect()
+      
+      
+    }else{
+      prestamos <- entregas_material%>%
+        filter(Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        filter(Tipo_receptor == "PRODUCTOR")%>%
+        select(Fecha, Clave_productor, Clave_material, Cantidad)%>%
+        collect()
+    }
+    
+    if(!"entradas_material" %in% ls()){
+      devoluciones <- entradas.material()%>%
+        filter(Tipo_proveedor == "PRODUCTOR")%>%
+        rename(Clave_productor = Clave_proveedor)%>%
+        filter(Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        collect()
+      
+    }else{
+      devoluciones <- entradas_material%>%
+        filter(Tipo_proveedor == "PRODUCTOR")%>%
+        rename(Clave_productor = Clave_proveedor)%>%
+        filter(Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        collect()
+    }
+    
+    
+    
     df <- data.frame()
-    productores <- unique(c(unique(entradas_fruta$Clave_productor), 
-                            unique(prestamos$Clave_productor),
-                            unique(devoluciones$Clave_productor)))
+    productores <- unique(rbind(unique(entradas_fruta%>%
+                                         select(Clave_productor)%>%
+                                         collect()), 
+                                unique(prestamos%>%
+                                         select(Clave_productor)%>%
+                                         collect()),
+                                unique(devoluciones%>%
+                                         select(Clave_productor)%>%
+                                         collect())))
+    
     
     sumas2 <- function(x){
       
@@ -1147,17 +1268,229 @@ saldos.material <- function(Clave = NULL, Desde = inicio_temporada, Hasta = Sys.
       
       imp <- sum(suma$Imp, na.rm = TRUE)
       
-       suma%>%
+      suma%>%
         select(Presentacion, Saldo )%>%
-         rbind(data.frame(Presentacion = "Imp", Saldo = imp))%>%
-                 mutate(Clave_productor = x)
+        rbind(data.frame(Presentacion = "Imp", Saldo = imp))%>%
+        mutate(Clave_productor = x)
     }
-   map(productores, sumas2)%>%
-     map_df(rbind)%>%
-     spread(value = Saldo, fill = 0, key = Presentacion)
+    
+    
+    map(productores$Clave_productor, sumas2)%>%
+      map_df(rbind)%>%
+      spread(value = Saldo, fill = 0, key = Presentacion)
+    
+    
+  }
   
-  }  
 }
+saldos.material <- function(Clave = NULL, Desde = inicio_temporada, Hasta = Sys.Date()){
+  
+  
+  sumas <- function(Clave){
+    datos <- list(
+      
+      
+      prestamos = prestamos%>%
+        filter(Clave_productor == Clave)%>%
+        collect()%>%
+        resumen.clave_material()%>%
+        mutate(Prestamos = Total)%>%
+        select(-Total),
+      
+      entradas_fruta = entradas_fruta%>%
+        filter(Clave_productor == Clave)%>%
+        collect()%>%
+        rename(Cantidad = Aceptadas)%>%
+        resumen.clave_producto()%>%
+        mutate(Recepcion = Total)%>%
+        select(-Total),
+      
+      devoluciones = {
+        
+        
+        dev <-   devoluciones%>%
+          filter(Clave_productor == Clave)%>%
+          collect()
+        
+        if(length(data.frame(dev)[,1]) == 0){
+          
+          data.frame(Presentacion = NA, Devoluciones = NA)
+          
+        }else{
+          
+          dev%>%
+            resumen.clave_material()%>%
+            mutate(Devoluciones = Total)%>%
+            select(-Total)
+        }
+      })
+    
+    x <-  mymerge(datos)%>%
+      filter(!Presentacion %in% c("2LB", "6X2LB"))%>%
+      mutate(Saldo = Prestamos - Recepcion - Devoluciones)%>%
+      merge(precios, by = "Presentacion", all = TRUE)%>%
+      mutate(Imp = Saldo * Precio)
+    
+    x[is.na(x)] <- 0
+    
+    x
+  }
+  
+  
+  
+  precios <- readRDS("precios_ref.RDS")
+  
+  if(!is.null(Clave)){
+    
+    
+    if(!"entradas_fruta" %in% ls()){
+      entradas_fruta  <-   entradas.fruta(Campos = c("Fecha", "Clave_productor", "Clave_producto", "Aceptadas"))%>%
+        filter(Clave_productor == Clave, 
+               Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        mutate(Cantidad = Aceptadas)%>%
+        collect()
+    }else{
+      entradas_fruta  <-entradas_fruta%>%
+        filter(Clave_productor == Clave, 
+               Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        mutate(Cantidad = Aceptadas)%>%
+        collect()
+    }
+    if(!"entregas_material" %in% ls()){
+      prestamos <- entregas.material(Campos = c("Tipo_salida", "Clave_productor", 
+                                                "Fecha", "Cantidad", "Clave_material",
+                                                "Tipo_receptor", "Clave_acopio"))%>%
+        filter(Clave_productor == Clave, 
+               Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        filter(Tipo_receptor == "PRODUCTOR")%>%
+        select(Fecha, Clave_productor, Clave_material, Cantidad)%>%
+        collect()
+      
+      
+    }else{
+      prestamos <- entregas_material%>%
+        filter(Clave_productor == Clave, 
+               Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        filter(Tipo_receptor == "PRODUCTOR")%>%
+        select(Fecha, Clave_productor, Clave_material, Cantidad)%>%
+        collect()
+    }
+    
+    if(!"entradas_material" %in% ls()){
+      devoluciones <- entradas.material()%>%
+        filter(Tipo_proveedor == "PRODUCTOR")%>%
+        rename(Clave_productor = Clave_proveedor)%>%
+        filter(Clave_productor == Clave, 
+               Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        collect()
+      
+    }else{
+      devoluciones <- entradas_material%>%
+        filter(Tipo_proveedor == "PRODUCTOR")%>%
+        rename(Clave_productor = Clave_proveedor)%>%
+        filter(Clave_productor == Clave, 
+               Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        collect()
+    }
+    return(sumas(Clave)%>%
+             select(-Precio, -Imp))
+    
+  }else{
+    
+    
+    if(!"entradas_fruta" %in% ls()){
+      entradas_fruta  <-   entradas.fruta(Campos = c("Fecha", "Clave_productor", "Clave_producto", "Aceptadas"))%>%
+        filter(Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        mutate(Cantidad = Aceptadas)%>%
+        collect()
+    }else{
+      entradas_fruta  <-entradas_fruta%>%
+        filter(Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        mutate(Cantidad = Aceptadas)%>%
+        collect()
+    }
+    if(!"entregas_material" %in% ls()){
+      prestamos <- entregas.material(Campos = c("Tipo_salida", "Clave_productor", 
+                                                "Fecha", "Cantidad", "Clave_material",
+                                                "Tipo_receptor", "Clave_acopio"))%>%
+        filter(Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        filter(Tipo_receptor == "PRODUCTOR")%>%
+        select(Fecha, Clave_productor, Clave_material, Cantidad)%>%
+        collect()
+      
+      
+    }else{
+      prestamos <- entregas_material%>%
+        filter(Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        filter(Tipo_receptor == "PRODUCTOR")%>%
+        select(Fecha, Clave_productor, Clave_material, Cantidad)%>%
+        collect()
+    }
+    
+    if(!"entradas_material" %in% ls()){
+      devoluciones <- entradas.material()%>%
+        filter(Tipo_proveedor == "PRODUCTOR")%>%
+        rename(Clave_productor = Clave_proveedor)%>%
+        filter(Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        collect()
+      
+    }else{
+      devoluciones <- entradas_material%>%
+        filter(Tipo_proveedor == "PRODUCTOR")%>%
+        rename(Clave_productor = Clave_proveedor)%>%
+        filter(Fecha > inicio_temporada, 
+               Fecha < Hasta)%>%
+        collect()
+    }
+    
+    
+    
+    df <- data.frame()
+    productores <- unique(rbind(unique(entradas_fruta%>%
+                                         select(Clave_productor)%>%
+                                         collect()), 
+                                unique(prestamos%>%
+                                         select(Clave_productor)%>%
+                                         collect()),
+                                unique(devoluciones%>%
+                                         select(Clave_productor)%>%
+                                         collect())))
+    
+    
+    sumas2 <- function(x){
+      
+      suma <- sumas(x)
+      
+      imp <- sum(suma$Imp, na.rm = TRUE)
+      
+      suma%>%
+        select(Presentacion, Saldo )%>%
+        rbind(data.frame(Presentacion = "Imp", Saldo = imp))%>%
+        mutate(Clave_productor = x)
+    }
+    
+    
+    foreach(x = productores$Clave_productor, .combine = rbind) %dopar%
+      sumas2(x = x)%>%
+      spread(value = Saldo, fill = 0, key = Presentacion)
+    
+    
+  }
+  
+}
+
+
 
 load.proyecciones <- function(campos = c( "Clave_sector", "Proyeccion", "Semana_db",      
                                           "Year_db", "Clave_productor", "Clave_huerta",   

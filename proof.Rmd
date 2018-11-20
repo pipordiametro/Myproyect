@@ -19,14 +19,15 @@ library(highcharter)
 library(rmarkdown)
 library(xts)
 library(forecast)
-library(future)
+#library(future)
+library(foreach)
 
 source("funciones.R")
 ```
 
 
 ```{r context = "data", include=FALSE}
-plan(multiprocess)
+#plan(multiprocess)
 #entradas de fruta
 
  entradas_fruta <- entradas.fruta(Campos = c("Fecha", "Clave_productor", "Clave_producto",
@@ -37,7 +38,7 @@ plan(multiprocess)
              mutate(Fecha = as.Date(Fecha))
 
 
-entradas_fruta_a %<-% rbind(
+entradas_fruta_a <- rbind(
   read_rds("fruta_vieja.RDS"),
   
   entradas_fruta)
@@ -48,7 +49,7 @@ entradas_fruta_a %<-% rbind(
 
 
 #Entradas totales
-entradas_totales %<-% ddply(entradas_fruta%>%
+entradas_totales <- ddply(entradas_fruta%>%
                             select(Fecha, Clave_producto, Aceptadas, Clave_acopio)%>%
                             collect()%>%
                             tiempos("Semana"),
@@ -60,14 +61,14 @@ entradas_totales %<-% ddply(entradas_fruta%>%
 
 
 
-entradas_material %<-% rbind(
+entradas_material <- rbind(
   read_rds("ent_mat_viejo.RDS"),
   
   entradas.material()%>%
     filter(Fecha >= inicio_temporada)%>%
   collect())
 
-entregas_material %<-% rbind(
+entregas_material <- rbind(
   
   read_rds("entregas_mat_viejo.RDS"),
   
@@ -78,8 +79,8 @@ entregas_material %<-% rbind(
     filter(Fecha >= inicio_temporada)%>%
   collect())
 
-zar_usda %<-% zar.usda() 
-ara_usda %<-% ara.usda()
+zar_usda <- zar.usda() 
+ara_usda <- ara.usda()
 #productores activos
 productores <-   data.frame(Clave_productor = unique(entradas_fruta%>%
                                                        select(Clave_productor)%>%
@@ -116,11 +117,11 @@ presentaciones <-  merge(myfetch("tbProductos")%>%
 load.materiales(Campos = c("Material"))
 
 
-materiales %<-% setNames(materiales$Clave_material, materiales$Material)
+materiales <- setNames(materiales$Clave_material, materiales$Material)
 
 
 
-saldos <-  saldos.material()
+saldos <-   saldos.material()
 
 
 ```
