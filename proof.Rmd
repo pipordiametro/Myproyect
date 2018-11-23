@@ -33,9 +33,10 @@ source("funciones.R")
  entradas_fruta <- entradas.fruta(Campos = c("Fecha", "Clave_productor", "Clave_producto",
                                      "Aceptadas", "Clave_acopio", "Precio",
                                      "Semana_db"))%>%
-             filter(Fecha >= inicio_temporada)%>%
+               mutate(Fecha = as.Date(Fecha))%>%  
+             filter(as.Date(Fecha) >inicio_temporada)%>%
              collect()%>%
-             mutate(Fecha = as.Date(Fecha))
+  mutate(Fecha = as.Date(Fecha))
 
 
 entradas_fruta_a <- rbind(
@@ -65,8 +66,10 @@ entradas_material <- rbind(
   read_rds("ent_mat_viejo.RDS"),
   
   entradas.material()%>%
-    filter(Fecha >= inicio_temporada)%>%
-  collect())
+     mutate(Fecha = as.Date(Fecha))%>%
+    filter(as.Date(Fecha) >= inicio_temporada)%>%
+  collect())%>%
+  mutate(Fecha = as.Date(Fecha))
 
 entregas_material <- rbind(
   
@@ -76,8 +79,10 @@ entregas_material <- rbind(
   entregas.material(Campos = c( "Tipo_salida", "Clave_productor", 
                                       "Fecha", "Cantidad", "Clave_material",
                                       "Tipo_receptor", "Clave_acopio"))%>%
-    filter(Fecha >= inicio_temporada)%>%
-  collect())
+     mutate(Fecha = as.Date(Fecha))%>%
+    filter(as.Date(Fecha) >= inicio_temporada)%>%
+  collect()%>%
+    mutate(Fecha = as.Date(Fecha)))
 
 zar_usda <- zar.usda() 
 ara_usda <- ara.usda()
@@ -121,7 +126,7 @@ materiales <- setNames(materiales$Clave_material, materiales$Material)
 
 
 
-saldos <-   saldos.material()
+#saldos <-   saldos.material()
 
 
 ```

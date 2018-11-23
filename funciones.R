@@ -15,9 +15,11 @@ inicio_temporada <- as.Date("2018-09-01")
  #              dsn = "SQLProyecto08",  uid = "francisco", pwd = "Alpasa2017")
 
 
-con <- DBI::dbConnect(odbc::odbc(), Driver = "PostgreSQL Unicode(x64)", 
-                      Server = "localhost", Database = "reyes", UID = "postgres", 
-                      PWD = "Cyan98150896", Port = 5432)
+#con <- DBI::dbConnect(odbc::odbc(), Driver = "PostgreSQL Unicode(x64)", 
+#                      Server = "localhost", Database = "reyes", UID = "postgres", 
+#                      PWD = "Cyan98150896", Port = 5432)
+
+con <- dbConnect(odbc::odbc(), "SQLProyecto08", uid = "francisco", pwd = "Alpasa2017", encoding = "UTF8")
 
 myfetch <- function(nombre,base = FALSE){
  # if(unname(Sys.info()["nodename"] == "DESKTOP-LQ3B302") ){
