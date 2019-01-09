@@ -90,7 +90,7 @@ get.precios <- function(){
     fruit <- read_rds(paste0("Precios/",var,".RDS"))%>%
       mutate(reportDate = as.Date(reportDate))
     
-    dias <- as.Date(c(max(fruit$reportDate):Sys.Date()), origin = "1970-01-01")
+    dias <- as.Date(c(as.Date("2010-01-01"):Sys.Date()), origin = "1970-01-01")
     
     #fruit <- fruit[,-c(1)]
     
@@ -212,8 +212,23 @@ get.precios <- function(){
       filter(!is.na(Puerto))
     
     ara <- merge(ARA.CN%>%
-                   filter(!Puerto %in% c("CENTRAL & NORTH FLORIDA", 
-                                         "ARGENTINA IMPORTS - PORT OF ENTRY LOS ANGELES INTERNATIONAL AIRPORT"))%>%
+                   filter(!Puerto %in% c("CENTRAL & NORTH FLORIDA",
+                                         "MEXICO CROSSINGS THROUGH ARIZONA, CALIFORNIA AND TEXAS",
+                                         "ARGENTINA IMPORTS - PORT OF ENTRY LOS ANGELES INTERNATIONAL AIRPORT",
+                                         "CHILE IMPORTS - PORT OF ENTRY LOS ANGELES AREA",
+                                         "CHILE IMPORTS - PORT OF ENTRY MIAMI AREA",
+                                         "CHILE IMPORTS - PORT OF ENTRY PHILADELPHIA AREA ",
+                                        "CHILE IMPORTS - PORT OF ENTRY LOS ANGELES INTERNATIONAL AIRPORT ",
+                                        "CHILE IMPORTS - PORT OF ENTRY MIAMI INTERNATIONAL AIRPORT",
+                                        "ARGENTINA IMPORTS - PORT OF ENTRY MIAMI INTERNATIONAL AIRPORT",
+                                        "URUGUAY IMPORTS - PORT OF ENTRY MIAMI INTERNATIONAL AIRPORT",
+                                        "ARGENTINA IMPORTS - PORT OF ENTRY LOS ANGELES INTERNATIONAL AIRPORT",
+                                        "MEXICO CROSSINGS THROUGH ARIZONA, CALIFORNIA AND TEXAS",
+                                        "ARGENTINA/URUGUAY IMPORTS - PORTS OF ENTRY SOUTH FLORIDA",
+                                        "ARGENTINA/URUGUAY IMPORTS - PORTS OF ENTRY SOUTHERN CALIFORNIA",
+                                        "PERU IMPORTS - PORTS OF ENTRY PHILADELPHIA AREA AND NEW YORK CITY AREA",
+                                        "PERU IMPORTS - PORTS OF ENTRY SOUTHERN CALIFORNIA"
+                                        ))%>%
                    ddply(.(Fecha), summarize, 
                          High = mean(Precio_mayor, na.rm = TRUE), Low = mean(Precio_menor, na.rm = TRUE), 
                          Close = ((High+Low)/2))%>%
