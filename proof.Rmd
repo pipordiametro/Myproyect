@@ -1217,7 +1217,7 @@ zar_full <- reactive({
 
 entradas_zar <- entradas_zar[,-1]
 
-zar_full <- merge(zar_usda["20130929/"], entradas_zar, fill = 0)
+zar_full <- merge(zar_usda["20130929/"], entradas_zar, fill = 0, all.x = TRUE)
 
 rm(entradas_zar, zar_usda)
 #zar_full$SMA10 <- SMA(Cl(zar_full), 5)
@@ -1233,7 +1233,7 @@ precios6oz <- entradas_fruta_a%>%
   xts(order.by = .$Fecha)
 
 
- merge(zar_full, precios6oz[,-1])
+ merge(zar_full, precios6oz[,-1], all.x = TRUE)
 
 
   }else{
@@ -1251,7 +1251,7 @@ precios6oz <- entradas_fruta_a%>%
 
 entradas_zar <- entradas_zar[,-1]
 
-zar_full <- merge(ara_usda, entradas_zar, fill = 0)
+zar_full <- merge(ara_usda, entradas_zar, fill = 0, all.x = TRUE)
 
 rm(entradas_zar, ara_usda)
 #zar_full$SMA10 <- SMA(Cl(zar_full), 5)
@@ -1267,7 +1267,7 @@ precios6oz <- entradas_fruta_a%>%
   xts(order.by = .$Fecha)
 
 
- merge(zar_full, precios6oz[,-1])
+ merge(zar_full, precios6oz[,-1], all.x = TRUE)
 
   }
 })
@@ -1445,7 +1445,7 @@ output$Precios_master <- renderHighchart(
   
   hc
   
-
+# Monitor puntos
 
   }else{
     if(input$Tipo_p == "Monitor Puntos"){
@@ -1646,7 +1646,7 @@ output$Precios_master <- renderHighchart(
    hc
   
     
-   
+   #Proyeccion
    
       }else{
           if(input$Tipo_p == "Proyeccion"){
@@ -1673,7 +1673,7 @@ fruta_ts <- ts(fruta$Promedio,
                          min(fruta$Semanats)),
                frequency = 52)
 
-fit <- stlf(fruta_ts, method="ets")
+fit <- tbats(fruta_ts)
 
 x <-forecast(fit,h=5)
 

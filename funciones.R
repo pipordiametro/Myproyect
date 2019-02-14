@@ -119,9 +119,10 @@ get.precios <- function(){
       if(file.exists(dest)){
         data <- xmlParse(dest)
         #rootnode <- xmlRoot(data)
-        table <- xmlToDataFrame(data)
+        table <- xmlToDataFrame(data, stringsAsFactors = FALSE)
         #table <- table[,-c(1)]
-        table$reportDate <- as.Date(table$reportDate,format="%m/%d/%Y")
+        table$reportDate <- as.Date(table$reportdate,format="%m/%d/%Y")
+        
         fruit <- rbind(fruit,table)
         fruit <- unique(fruit)
       }
@@ -388,7 +389,7 @@ entradas.material <- function(){
   entradas_material <- left_join(myfetch("tbAlmEnt"),myfetch("tbAlmEntReg"), 
                              by = "intNum_reg", all.x = TRUE, suffix = c("h", "b"))%>%
     filter(strCan_celb == "NO")%>%
-    transmute(Clave_acopio = intCla_alm, Tipo_entrada =  strTip_ent, Fecha = as.Date(fecFec_fac), 
+    transmute(Clave_acopio = intCla_alm, Tipo_entrada =  strTip_ent, Fecha = as.Date(fecCre_acih), 
               Tipo_proveedor = strTip_prov, Cantidad = intCan_tid , Clave_material = intCla_mat,
               Clave_proveedor = intCla_prov)%>%
     filter(Fecha > inicio_temporada)
@@ -405,7 +406,7 @@ entregas.material <- function(Campos = c("Clave_acopio", "Tipo_salida", "Clave_p
                              by = "intNum_reg", all.x = TRUE, suffix = c("h", "b"))%>%
     filter(strCan_celb == "NO")%>%
     transmute(Clave_acopio = intCla_alm, Tipo_salida = strTip_sal, Clave_productor = intCla_pro,
-              Fecha = as.Date(fecFec_not), Cantidad = intCan_tid, Clave_material = intCla_mat, 
+              Fecha = as.Date(fecCre_acih), Cantidad = intCan_tid, Clave_material = intCla_mat, 
               Tipo_receptor = strTip_pro )%>%
     filter(Fecha > inicio_temporada)%>%
     select(one_of(Campos))
@@ -891,4 +892,152 @@ plot.decomposed.xts <-  function(x, ...){
     p <- cbind(observed = xx, trend = x$trend, seasonal = x$seasonal, random = x$random)
     plot(p, main = paste("Decomposition of", x$type, "time series"), multi.panel = 4,
          yaxis.same = FALSE, major.ticks = "days", grid.ticks.on = "days", ...)
+}
+
+
+
+load.reembales <- function(){
+  
+  myfetch("tbReembalajes")%>%
+    filter(strCan_cel == "NO")%>%
+    transmute(Fecha = fecFec_mov,  Cantidad_anterior = intCan_ant, Numero_registro = intNum_reg,
+              Producto_anterior = intProd_ant, Cantidad_nueva= intCan_nvo, Producto_nuevo = intProd_nvo,
+              Registro_anterior = intRegA_ant, intNum_regO = intNum_regO, Numero_folio = intNum_fol,
+              Registro_nuevo = intRegA_nvo)%>%
+    mutate(Fecha = as.Date(Fecha))
+}
+
+
+resumen.clave_producto <- function(df, 
+                             Clave_producto = "Clave_producto", 
+                             Cantidad = "Cantidad"){
+  
+  totales  <- data.frame(Clave_producto = df[,c(Clave_producto)], Cantidad = df[c(Cantidad)])%>%
+    ddply(.(Clave_producto), summarize, Total = sum(Cantidad))
+  
+  rbind(
+    totales%>%
+      get.productos(c("Presentacion", "Peso", "Unidad", "Clams"))%>%
+      mutate(Presentacion = ifelse(Presentacion == "12X125G", "12X4.4OZ", Presentacion))%>%
+      ddply(.(Presentacion), summarize, Total = sum(Total))%>%
+      mutate(Tipo_material = "CAJA EMP."),
+    
+    
+    totales%>%
+      get.productos(c("Presentacion", "Peso", "Unidad", "Clams"))%>%
+      mutate(Presentacion = ifelse(Presentacion == "12X125G", "12X4.4OZ", Presentacion))%>%
+      mutate(Cantidad = Total*Clams,
+             Presentacion = paste0(Peso,Unidad))%>%
+      select( Presentacion, Cantidad)%>%
+      mutate(Presentacion = ifelse(Presentacion == "125G", "4.4OZ", Presentacion))%>%
+      ddply(.(Presentacion), summarize, Total = sum(Cantidad, na.rm = TRUE))%>%
+      mutate(Tipo_material = "CLAMSHELL")
+  )
+  
+}  
+
+
+resumen.clave_material <- function(df, Clave_material = "Clave_material", Cantidad = "Cantidad"){
+  
+  totales <- data.frame(Clave_material = df[,c("Clave_material")], Cantidad = df[,c("Cantidad")])%>%
+    get.material(Campos = c("Presentacion", "Tipo_material"))%>%
+    filter(Tipo_material %in% c("CAJA EMP.","CLAMSHELL" ))%>%
+    mutate(Presentacion = ifelse(Presentacion == "12X125G", "12X4.4OZ", 
+                                 ifelse(Presentacion == "125G", "4.4OZ", Presentacion)))%>%
+    ddply(.(Presentacion), summarize, Total = sum(Cantidad, na.rm = TRUE))
+  
+  
+}
+
+getMovements <- function(){
+  
+  library(RCurl)
+  library(XML)
+  library(purrr)
+  library(readr)
+  
+  frutas.df <- data.frame(Fruta = c("Blackberries", "Blueberries"), 
+                          Url = c("https://www.marketnews.usda.gov/mnp/fv-report?&commAbr=BLKBERI-V&repType=movementDaily&repTypeChanger=movementDaily&locAbrPass=ALL%7C%7C&step3date=true&type=movement&locChoose=commodity&refine=false&_environment=1&locAbrlength=1&organic=&environment=&locAbr=&commodityClass=allcommodity&repDate="), 
+                          "https://www.marketnews.usda.gov/mnp/fv-report?&commAbr=BLUBY&repType=movementDaily&repTypeChanger=movementDaily&locAbrPass=ALL%7C%7C&step3date=true&type=movement&locChoose=commodity&refine=false&_environment=1&locAbrlength=1&organic=&environment=&locAbr=&commodityClass=allcommodity&repDate=")
+  
+  descargar <- function(x){
+    
+    fruta <- x
+    
+    purl <- frutas.df[frutas.df == x,]$Url
+    
+    fruitmov <- read_rds(paste0("Movimientos/", fruta,".RDS"))
+    
+    if("reportDate" %in% names(fruitmov)){
+      
+      fruitmov <- fruitmov%>%
+        mutate(reportDate = as.Date(reportDate, format = "%m/%d/%Y"))
+      
+      
+      
+    }else{
+      
+      if ("date" %in% names(fruitmov)){
+        
+        fruitmov <- fruitmov%>%
+          mutate(date = as.Date(date, format = "%m/%d/%Y"))
+      }
+    }
+    
+    desde <- as.Date(min(max(fruitmov$date), Sys.Date()-10), origin = "1970-01-01")
+    
+    tryCatch({
+      
+      
+      diastart <- format(desde,"%d")
+      
+      messtart <- format(desde,"%m")
+      
+      yearstart <- format(desde,"%Y")
+      
+      diaend <- format(Sys.Date(),"%d")
+      
+      mesend <- format(Sys.Date(),"%m")
+      
+      yearend <- format(Sys.Date(),"%Y")
+      
+      
+      url <- paste0(purl,messtart,"%2F",diastart,"%2F",yearstart,"&endDate=", mesend, 
+                    "%2F", diaend, "%2F",  yearend, "&format=xml&rebuild=false")
+      
+      dest <- paste0("Movimientos/files/",fruta,"/",format(Sys.Date()),".xml")
+      
+      download.file(url,dest, quiet = TRUE, method="libcurl")
+      
+      data <- xmlParse(dest)
+      
+      table <- xmlToDataFrame(data, stringsAsFactors = FALSE)
+      
+      if("reportDate" %in% names(table)){
+        
+        table <- table%>%
+          mutate(reportDate = as.Date(reportDate, format = "%m/%d/%Y"))
+        
+        
+      }else{
+        
+        if("date" %in% names(table)){
+          table <- table%>%
+            mutate(date = as.Date(date, format = "%m/%d/%Y"))
+          
+        }
+      }
+      fruitmov <- rbind(fruitmov,table)
+      
+      fruitmov <- unique(fruitmov)
+      
+      write_rds(fruitmov,paste0("Movimientos/",fruta,".RDS"))
+      
+    }, 
+    error = function(e){print(e)},
+    warning = function(w){print(w)}
+    
+    )
   }
+  walk(as.character(frutas.df$Fruta), descargar)
+}
