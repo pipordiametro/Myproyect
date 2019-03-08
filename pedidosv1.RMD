@@ -1,0 +1,389 @@
+---
+title: "ALPASA FARMS"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    logo: images/logo.JPG
+    favicon: images/logo.JPG
+runtime: shiny_prerendered
+
+---
+
+
+```{r setup, include=FALSE}
+options(shiny.port=9999)
+library(flexdashboard)
+library(DT)
+source("funciones.R")
+library(shinyWidgets)
+#library(shinyTime)
+library(shiny)
+library(tidyr)
+library(kableExtra)
+library(shinyjs)
+library(readr)
+
+
+```
+
+
+
+```{r context = "server"}
+shinyInput <- function(FUN, len, id, ...) {
+      
+   inputs <- character(length(len))
+      for (i in 1:length(len)) {
+        clave <- len[i]
+        inputs[i] <- as.character(FUN(paste0(id, clave),label = clave, ...))
+      }
+      inputs
+}
+
+pedidosDataF <- function(){
+  readRDS("pedidos.RDS")
+}
+
+pedidosRegF <- function(){
+  readRDS("pedidosReg.RDS")
+}
+
+aliasF <- function(){
+  
+  readRDS("alias.RDS")
+}
+ 
+load.productos()
+
+saveReg <- function(mother, child, 
+                      motherTable = as.character(bquote(mother)), 
+                      childTable = as.character(bquote(hija))) {
+    
+    bind_rows(readRDS(paste0(motherTable, ".RDS")),
+              mother)%>%
+      write_rds(paste0(motherTable, ".RDS"))
+    
+    
+    bind_rows(readRDS(paste0(childTable, ".RDS")),
+              child)%>%
+      write_rds(paste0(childTable, ".RDS"))
+    
+    
+  }
+
+
+```
+
+```{r context = "server"}
+
+#load pedidos
+
+
+
+ped <- reactiveValues( 
+ 
+pedidosData =  pedidosDataF(),
+
+pedidosReg =  pedidosRegF()
+
+)
+
+alias <-  aliasF()
+
+pedidos <- reactive({
+  
+merge(ped$pedidosData, ped$pedidosReg, by = "Id_pedido")
+
+})
+
+pedidos2 <- reactive({
+  
+  pedidos()%>%
+    ddply(.(Id_pedido, Clave_pedido, Caducidad), 
+          summarise, 
+          Cajas = sum(Cantidad))%>%
+  mutate(No_pedido = shinyInput(actionLink,
+                             Id_pedido,
+                             "button_",
+                             #label = len,
+                             onclick = 'Shiny.onInputChange(\"pedido_button\",  this.id)'))
+})
+
+#boton de producto 
+observeEvent(input$pedido_button,{
+  
+  
+})
+
+
+#output pedidos 
+  output$pedidos <- renderDT(
+    datatable(pedidos2(), escape = FALSE))
+
+#load productos
+
+
+
+#Formulario de Producto Nuevo
+
+
+observeEvent(input$Nuevo_pedido, {
+  
+ 
+  showModal(
+    modalDialog(fade = FALSE, size = "l",
+      title = paste0("Pedido #", max(c(0,pedidos2()$Id_pedido)) + 1),
+      tagList(
+        div(style = "display: inline-block;vertical-align:top;",
+              textInput(inputId = 'Clave_pedido', 
+                label = 'Clave de Pedido')),
+              div(style = "display: inline-block;vertical-align:top;",
+                  dateInput(inputId = "Caducidad", label = "Fecha", 
+                            min = Sys.Date())
+    )),
+   # timeInput(inputId = "Nuevo_tiempo", "Hora Maxima:", 
+    #          value = strptime("20:00:00", "%T"), seconds = FALSE),
+        
+     
+        tagList(
+          div(style = "display: inline-block;vertical-align:top;",
+      selectInput("Fruta", "Fruta ", selected = "ZAR CN", 
+                    choices = "ZAR CN")),
+      div(style = "display: inline-block;vertical-align:top;",
+             selectizeInput("Alias", "Alias", choices = alias$Alias))),
+      tagList(
+        div(style = "display: inline-block;vertical-align:top;",
+          numericInput("Cantidad", "Cajas", value = 0)),
+      div(actionButton("Nuevo_guardar", "Grabar"),
+          style = "display: inline-block;vertical-align:top;")),
+          
+          #verbatimTextOutput(print(input$Fruta)),
+          
+          htmlOutput("ProdKable"),
+   
+   footer = tagList(
+     div(style = "display: inline-block;vertical-align:top;",
+          actionButton("Guardar_pedido", "Guardar")),
+     div(style = "display: inline-block;vertical-align:top;",
+        actionButton("Cancelar_pedido", "Cancelar",
+                    icon = icon("window-close", 
+                                class = NULL, 
+                                lib = "font-awesome")))
+    ))
+          )
+      
+ print(pedidoRegForm())
+        print(str(pedidoRegForm()))
+        print(pedidoNuevo$Reg)
+        print(str(pedidoNuevo$Reg))
+        
+  
+  
+})
+
+#Cancelar_pedido
+
+observeEvent(input$Cancelar_pedido,{
+    
+      removeModal(session)
+  
+    pedidoNuevo$Reg <-  data.frame(Alias = character(0),
+                    Clave_producto = character(0),
+                    Cantidad = numeric(0),
+                    Status = integer(0),
+                    Id = integer(0),
+                    stringsAsFactors = FALSE)
+  
+  pedidoNuevo$index <-  0
+
+    
+    print(pedidoNuevo$Reg)
+  
+})
+
+
+#Clave producto Nuevo
+
+
+
+savePedido <- function(df,dfReg){
+  df%>%
+    rbind(ped$pedidosData)%>%
+    write_rds("pedidos.RDS")
+  
+  df%>%
+    rbind(ped$pedidosReg)%>%
+    write_rds("pedidosReg.RDS")
+  
+}
+
+#Guardar pedido
+
+observeEvent(input$Guardar_pedido, {
+
+  
+  confirmSweetAlert(session, "Confirmar_pedido",  title = "", text = "", type = "success")
+    })
+
+  
+
+observeEvent(input$Confirmar_pedido,{
+    
+    print(input$Confirmar_pedido)
+    
+    
+    
+    if(isTRUE(input$Confirmar_pedido)){
+     
+  
+    saveReg( mother =   
+    
+      data.frame(Id_pedido = max(c(0,ped$pedidosData$Id_pedido)) + 1,
+           Clave_pedido = input$Clave_pedido,
+            Caducidad = input$Caducidad,
+           stringsAsFactors = FALSE), 
+      
+      child =     
+      
+    pedidoNuevo$Reg%>%
+    filter(Status == 1)%>%
+    select(-Status, - Id)%>%
+    mutate(Id_pedido = max(c(0,ped$pedidosData$Id_pedido)) + 1), 
+    
+    motherTable = "pedidos", childTable = "pedidosReg")
+        
+           
+    
+      
+      removeModal()
+      
+      ped$pedidosData <-  pedidosDataF()
+        
+        ped$pedidosReg <- pedidosRegF()
+      
+    }
+ 
+  
+
+  pedidoNuevo$Reg <-  data.frame(Alias = character(0),
+                    Clave_producto = character(0),
+                    Cantidad = numeric(0),
+                    Status = integer(0),
+                    Id = integer(0),
+                    stringsAsFactors = FALSE)
+  
+  pedidoNuevo$index <-  0
+  
+  print(pedidos())
+
+})
+
+output$ProdKable <- renderText({
+  
+  input$Cancelar_pedido
+  
+  
+ kable3(pedidoNuevo$Reg%>%
+          mutate(Acciones = shinyInput(actionButton,
+                             rownames(.),
+                             "buttonped_",
+                             icon(name = "trash", lib = "font-awesome"),
+                             onclick = 'Shiny.onInputChange(\"select_button2\",  this.id)'
+                             )), escape = FALSE)
+})
+
+
+
+
+
+
+  pedidoNuevo <- reactiveValues(
+  
+    Reg = data.frame(Alias = character(0),
+                    Clave_producto = character(0),
+                    Cantidad = numeric(0),
+                    Status = integer(0),
+                    Id = integer(0),
+                    stringsAsFactors = FALSE)
+  ,
+  index = 0
+)
+  
+  
+
+  
+  camposReg <- camposData <- c("Alias", "Cantidad")
+  
+  pedidoRegForm <- reactive({
+    
+    data <- sapply(camposReg, function(x) input[[x]])
+    
+  as.data.frame(t(data),
+                stringsAsFactors = FALSE)%>%
+    mutate(Status = 1)%>%
+    merge(alias, by = "Alias", all.x = TRUE)
+    
+  })
+  
+  output$ProdKable <- renderText({
+  
+ kable3(pedidoNuevo$Reg%>%
+          mutate(Acciones = shinyInput(actionButton,
+                             Id,
+                             "buttonped_",
+                             icon(name = "trash", lib = "font-awesome"),
+                             onclick = 'Shiny.onInputChange(\"select_button2\",  this.id)'
+                             ))%>%
+          filter(Status == 1)%>%
+          select(-Status, -Id), escape = FALSE)
+})
+  
+
+       observeEvent(input$Nuevo_guardar,{
+        
+         pedidoNuevo$index <- pedidoNuevo$index +1
+        
+        
+        
+        pedidoNuevo$Reg <-  rbind(pedidoNuevo$Reg, pedidoRegForm()%>%
+                                     mutate(Id = pedidoNuevo$index,
+                                            Cantidad = as.numeric(Cantidad)))
+        print(pedidoRegForm())
+        print(str(pedidoRegForm()))
+        print(pedidoNuevo$Reg)
+        print(str(pedidoNuevo$Reg))
+        
+ 
+  }) 
+  
+  observeEvent(input$select_button2, {
+    
+      pedidoNuevo$Reg[row.names(pedidoNuevo$Reg) == as.numeric(str_match(input$select_button2, "[[0-9]]{0,3}$")[,1]),]$Status <- 0
+    
+  sendSweetAlert(session, title = "SE ELIMINO UN REGISTRO" , type = "success", btn_labels = c("OK"))
+    
+  
+
+})
+  
+  
+  
+
+  
+
+ 
+  
+  
+```
+
+
+
+```{r}
+
+  actionButton("Nuevo_pedido", "Agregar Pedido" )
+
+
+
+DTOutput("pedidos")
+```
+

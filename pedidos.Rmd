@@ -1,0 +1,182 @@
+---
+title: "ALPASA FARMS"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    logo: images/logo.JPG
+    favicon: images/logo.JPG
+runtime: shiny_prerendered
+
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(DT)
+source("funciones.R")
+library(shinyWidgets)
+library(shinyTime)
+library(shiny)
+library(tidyr)
+library(kableExtra)
+
+```
+
+
+```{r context = "server-start"}
+
+
+
+```
+
+
+```{r context = "server"}
+ shinyInput <- function(FUN, len, id, ...) {
+      
+   inputs <- character(length(len))
+      for (i in 1:length(len)) {
+        clave <- len[i]
+        inputs[i] <- as.character(FUN(paste0(id, clave),label = clave, ...))
+      }
+      inputs
+ }
+
+productos_alias <- data.frame(
+  Alias = c("Holy", "Alpasa", "San Luca", "Natures Partner"),
+  Clave_producto = c("341001", "010201", "461001", "080201")
+)
+
+
+pedidos <- read_rds("pedidos.RDS")
+
+
+
+pedidos <- pedidos%>%
+  mutate(Prueba = shinyInput(actionLink,
+                             No_pedido,
+                             "button_",
+                             #label = len,
+                             onclick = 'Shiny.onInputChange(\"select_button\",  this.id)'))
+
+output$pedidos <- renderDT(datatable(pedidos, escape = FALSE))
+
+load.productos()
+    
+
+
+
+prod <- reactive({
+  
+    
+    if(is.null(input$Fruta)){
+    
+      "010201"
+      
+      
+  }else{
+    if(!is.null(input$Fruta)){
+        productos%>%
+    filter(Fruta == input$Fruta)%>%
+    select(Clave_producto)%>%
+    unique()
+    }
+  }
+      
+     
+})
+
+
+
+observeEvent(input$Nuevo_pedido, {
+  output$Formulario <- renderUI({
+  tagList(
+        selectInput("Fruta", "Fruta ", selected = "ZAR CN", 
+                    choices = unique(productos$Fruta)),
+        
+        selectInput("Clave_producto", "Producto",
+                    selected = "010201", choices = unique(prod())),
+        
+        selectInput("Alias", "Alias", choices = c("")),
+        
+        numericInput("Cantidad", "Cajas", value = 0)
+)})
+  
+  showModal(
+    modalDialog(
+      title = paste0("Pedido #", max(pedidos$No_pedido) + 1),
+      
+      div(dropdownButton(
+        uiOutput("Formulario"),
+        
+        div(actionButton("Nuevo_guardar", "Grabar"), style = "text-align:right"),
+        
+        circle = TRUE, status = "primary", icon = icon("plus-circle"), 
+              width = "300px", tooltip = tooltipOptions(title = "Nuevo Producto")), 
+          style = "text-align:center"),
+      
+      textInput(inputId = 'Clave_pedido', 
+              label = 'Clave de Pedido'),
+      
+  dateInput(inputId = "Caducidad", label = "Fecha", min = Sys.Date()),
+ # timeInput(inputId = "Nuevo_tiempo", "Hora Maxima:", 
+  #          value = strptime("20:00:00", "%T"), seconds = FALSE),
+  htmlOutput(kable2(pedidoKable())))
+      
+    )
+  
+
+  })
+
+pedidoNuevo <- reactiveValues(
+  data = data.frame()
+)
+ 
+camposNuevos <- c("Clave_pedido", "Clave_producto", "Cantidad", "Caducidad")
+
+formdata <- reactive({
+  data <- sapply(camposNuevos, function(x) input[[x]])
+    
+  as.data.frame(t(data))
+})
+
+  observeEvent(input$Nuevo_guardar,{
+
+     pedidoNuevo$data <-  rbind(pedidoNuevo$data, formdata())
+    
+     print(pedidoNuevo$data) 
+  })
+       
+     
+       
+       
+pedidoKable <- reactive({
+  input$Nuevo_guardar
+  
+  pedidoNuevo$data
+})
+  
+
+  
+  
+  
+  
+
+  
+
+```
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Chart A
+
+```{r}
+
+div(actionButton("Nuevo_pedido", "Agregar Pedido"), style = "text-align:center")
+
+load.productos()
+kable(productos)
+
+DTOutput("pedidos")
+```
+

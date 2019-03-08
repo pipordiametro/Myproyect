@@ -121,7 +121,7 @@ materiales <- setNames(materiales$Clave_material, materiales$Material)
 
 
 
-saldos <-   saldos.material()
+#saldos <-   saldos.material()
 
 
 ```
@@ -1671,7 +1671,7 @@ output$Precios_master <- renderHighchart(
      
        x <- fruta%>%
          filter(Temporada == var)%>%
-         tiempos("Semana")%>%
+         tiempos2("Semana")%>%
          ddply(.(Semana), 
                summarize,
                Promedio = mean(Close, na.rm = TRUE))%>%
@@ -1828,7 +1828,7 @@ if (is.null(input$Productor_proy)){
     filter(Clave_productor %in% productores_p$Codigo)%>%
   filter(Year_db %in% c(2018,2019))%>%
   arrange(Semana_db, Year_db)%>%
-  filter(!(Year_db == 2018 & Semana_db >52) & !(Year_db == 2019 & Semana_db > 34))%>%
+  filter(!(Year_db == 2018 & Semana_db <= 34) & !(Year_db == 2019 & Semana_db > 34))%>%
   filter(Proyeccion != 0)%>%
     collect()
 }else{
@@ -1840,7 +1840,7 @@ if (is.null(input$Productor_proy)){
     filter(Clave_productor == str_match(input$Productor_proy, "^[[0-9]]{0,3}")[,1])%>%
   filter(Year_db %in% c(2018,2019))%>%
   arrange(Semana_db, Year_db)%>%
-  filter(!(Year_db == 2018 & Semana_db >52) & !(Year_db == 2019 & Semana_db > 34))%>%
+  filter(!(Year_db == 2018 & Semana_db < 34) & !(Year_db == 2019 & Semana_db > 34))%>%
   filter(Proyeccion != 0)%>%
     collect()   }})
 
