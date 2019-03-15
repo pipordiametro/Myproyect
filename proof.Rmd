@@ -79,8 +79,11 @@ entregas_material <- rbind(
     filter(Fecha >= inicio_temporada)%>%
   collect())
 
-zar_usda <- zar.usda() 
-ara_usda <- ara.usda()
+
+
+
+
+
 #productores activos
 productores <-   data.frame(Clave_productor = unique(entradas_fruta%>%
                                                        select(Clave_productor)%>%
@@ -1224,6 +1227,8 @@ selectInput("Fruta_p", "Frutas", choices = c("Zarzamora", "Arandano"), selected 
 
 actionButton("Update", "Actualizar usda" )
 
+selectInput("Cat_usda", "Categoria Usda", choices = c("Precio", "Volumen"))
+
 selectInput("Tipo_p", "Tipo de grafico", choices = c("Monitor Burbujas", "Monitor Puntos", "Descomposicion", "Seasonal", "Proyeccion"),
             selected = "Proyeccion")
 
@@ -1240,6 +1245,23 @@ Grafico {.tabset}
 ----------------------------------------------------------------------------
 
 ```{r, context = "server"}
+
+  
+
+zar_usda <-  reactive({
+  if(input$Cat_usda == "Precio"){
+  zar.usda()}else{
+    readRDS(paste("mov", "Blackberries", ".RDS")) 
+}})
+
+ara_usda <- reactive({
+  if(input$Cat_usda == "Precio"){
+  ara.usda()}else{
+    readRDS(paste("mov", "Blueberries", ".RDS"))  
+  }
+})
+
+
 
 observeEvent(input$Update, get.precios())
   
@@ -1259,9 +1281,9 @@ zar_full <- reactive({
 
 entradas_zar <- entradas_zar[,-1]
 
-zar_full <- merge(zar_usda["20130929/"], entradas_zar, fill = 0, all.x = TRUE)
+zar_full <- merge(zar_usda()["20130929/"], entradas_zar, fill = 0, all.x = TRUE)
 
-rm(entradas_zar, zar_usda)
+rm(entradas_zar, zar_usda())
 #zar_full$SMA10 <- SMA(Cl(zar_full), 5)
 #10204
 precios6oz <- entradas_fruta_a%>%
@@ -1293,9 +1315,9 @@ precios6oz <- entradas_fruta_a%>%
 
 entradas_ara <- entradas_ara[,-1]
 
-ara_full <- merge(ara_usda, entradas_ara, fill = 0, all.x = TRUE)
+ara_full <- merge(ara_usda(), entradas_ara, fill = 0, all.x = TRUE)
 
-rm(entradas_ara, ara_usda)
+rm(entradas_ara, ara_usda())
 #zar_full$SMA10 <- SMA(Cl(zar_full), 5)
 #10204
 precios6oz <- entradas_fruta_a%>%
@@ -1599,11 +1621,11 @@ output$Precios_master <- renderHighchart(
     }else{
       if(input$Tipo_p == "Descomposicion"){
         if(input$Fruta_p == "Zarzamora"){ 
-        fruta  <- zar_usda$Close%>%
+        fruta  <- zar_usda()$Close%>%
             apply.weekly(mean)
        }else{
          if(input$Fruta_p == "Arandano"){
-        fruta <- ara_usda$Close%>%
+        fruta <- ara_usda()$Close%>%
           apply.weekly(mean)
          }
       }
@@ -1633,7 +1655,7 @@ output$Precios_master <- renderHighchart(
       if(input$Tipo_p == "Seasonal"){
       
        if(input$Fruta_p == "Zarzamora"){ 
-        fruta  <- data.frame(Fecha = index(zar_usda$Close), Close = zar_usda$Close)%>%
+        fruta  <- data.frame(Fecha = index(zar_usda()$Close), Close = zar_usda()$Close)%>%
           filter(Fecha >= as.Date("2013-09-01"))%>%
           tiempos("Temporada")
              
@@ -1643,7 +1665,7 @@ output$Precios_master <- renderHighchart(
         
        }else{
          if(input$Fruta_p == "Arandano"){
-        fruta <- data.frame(Fecha = index(ara_usda$Close), Close = ara_usda$Close)%>%
+        fruta <- data.frame(Fecha = index(ara_usda()$Close), Close = ara_usda()$Close)%>%
           filter(Fecha >= as.Date("2013-09-01"))%>%
           tiempos("Temporada")
           
@@ -1692,10 +1714,11 @@ output$Precios_master <- renderHighchart(
       }else{
           if(input$Tipo_p == "Proyeccion"){
             if(input$Fruta_p == "Zarzamora"){
-              
-              fit <- read_rds("zar_fit.RDS")
+              if(input$Cat_usda == "Precio"){
+                
+                fit <- read_rds("zar_fit.RDS")
 
-    fruta <-  data.frame(Fecha = index(zar_usda$Close), Close = zar_usda$Close)%>%
+    fruta <-  data.frame(Fecha = index(zar_usda()$Close), Close = zar_usda()$Close)%>%
       tiempos("Semanats")%>%
       ddply(.(Semanats), summarize, Promedio = mean(Close), Fecha = min(Fecha))%>%
       arrange(Semanats)
@@ -1706,6 +1729,24 @@ output$Precios_master <- renderHighchart(
                                                    format = "%Y"))), 
                              min(fruta$Semanats)),
                    frequency = 52)
+              }else{
+                fit <- read_rds("zar_fit.RDS")
+
+    fruta <-  data.frame(Fecha = index(zar_usda()$Close), 
+                         Promedio = zar_usda()$Close)%>%
+      rename(Promedio = Close)%>%
+      tiempos("Semanats")%>%
+     # ddply(.(Semanats), summarize, Promedio = Close, Fecha = min(Fecha))%>%
+      arrange(Semanats)
+    
+    
+    fruta_ts <- ts(fruta$Promedio, 
+                   start = c(min(as.integer(format(fruta$Fecha, 
+                                                   format = "%Y"))), 
+                             min(fruta$Semanats)),
+                   frequency = 52)
+              }
+              
               
   
             
@@ -1714,9 +1755,10 @@ output$Precios_master <- renderHighchart(
     }else{
               if(input$Fruta_p == "Arandano"){
                 
-                fit <- read_rds("ara_fit.RDS")
+                if(input$Cat_usda == "Precio"){
+                        fit <- read_rds("ara_fit.RDS")
                 
-fruta <-  data.frame(Fecha = index(ara_usda$Close), Close = ara_usda$Close)%>%
+fruta <-  data.frame(Fecha = index(ara_usda()$Close), Close = ara_usda()$Close)%>%
       tiempos("Semanats")%>%
       ddply(.(Semanats), summarize, Promedio = mean(Close), Fecha = min(Fecha))%>%
       arrange(Semanats)
@@ -1726,13 +1768,29 @@ fruta <-  data.frame(Fecha = index(ara_usda$Close), Close = ara_usda$Close)%>%
                                                    format = "%Y"))), 
                              min(fruta$Semanats)),
                    frequency = 52)
+                  
+                }else{
+                        fit <- read_rds("ara_fit.RDS")
                 
+fruta <-  data.frame(Fecha = index(ara_usda()$Close), 
+                     Promedio = ara_usda()$Close)%>%
+  rename(Promedio = Close)%>%
+      tiempos("Semanats")%>%
+    #  ddply(.(Semanats), summarize, Promedio = sum(Close), Fecha = min(Fecha))%>%
+      arrange(Semanats)
+    
+    fruta_ts <- ts(fruta$Promedio, 
+                   start = c(min(as.integer(format(fruta$Fecha, 
+                                                   format = "%Y"))), 
+                             min(fruta$Semanats)),
+                   frequency = 52)
+                }
               }
             }
         
 
 
-x <-forecast(fit,h=5)
+x <- forecast(fit,h=5)
 
 
 proyeccion <- data.frame(Semanats = max(fruta$Semanats)+ c(1:5),
@@ -1776,7 +1834,7 @@ hc <- highchart()%>%
 
 
 
-output$Prueba <- renderDataTable({ara_usda%>%
+output$Prueba <- renderDataTable({ara_usda()%>%
                                    datatable()})
 ```
 

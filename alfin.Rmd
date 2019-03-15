@@ -1,0 +1,321 @@
+---
+title: "ALPASA FARMS"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    logo: images/logo.JPG
+    favicon: images/logo.JPG
+runtime: shiny_prerendered
+
+---
+
+```{r, context = "setup"}
+options(shiny.port=9999)
+library(flexdashboard)
+library(DT)
+library(stringr)
+library(tidyr)
+library(highcharter)
+library(rmarkdown)
+library(xts)
+library(forecast)
+#library(future)
+library(foreach)
+
+source("funciones.R")
+```
+
+
+inputs {.sidebar}
+----------------------------------------------------------------------------
+
+
+```{r}
+options(shiny.port=9999)
+
+selectInput("Fruta_p", "Frutas", choices = c("Zarzamora", "Arandano"), selected = "Zarzamora")
+
+
+actionButton("Update", "Actualizar usda" )
+
+selectInput("Cat_usda", "Categoria Usda", choices = c("Precio", "Volumen"))
+
+selectInput("Tipo_p", "Tipo de grafico", choices = c("Descomposicion", "Seasonal", "Proyeccion"),
+            selected = "Proyeccion")
+
+```
+
+
+```{r, context = "server"}
+fondoplot <- "transparent"
+areacolor <- "rgba(6,144,207,.8)"
+
+zar_usda <-  reactive({
+  if(input$Cat_usda == "Precio"){
+  zar.usda()}else{
+    readRDS(paste0("mov", "Blackberries", ".RDS")) 
+}})
+
+ara_usda <- reactive({
+  if(input$Cat_usda == "Precio"){
+  ara.usda()}else{
+    readRDS(paste0("mov", "Blueberries", ".RDS"))  
+  }
+})
+
+observeEvent(input$Update, getUsda())
+
+```
+
+
+
+
+```{r, context = "server"}
+output$Precios_master <- renderHighchart( 
+  
+      if(input$Tipo_p == "Descomposicion"){
+        if(input$Fruta_p == "Zarzamora"){ 
+        fruta  <- zar_usda()$Close%>%
+            apply.weekly(mean)
+       }else{
+         if(input$Fruta_p == "Arandano"){
+        fruta <- ara_usda()$Close%>%
+          apply.weekly(mean)
+         }
+      }
+    attr(fruta, 'frequency') <- 52.25
+    
+    fruta_dec <- decompose.xts(fruta$Close)
+    
+  highchart(type = "stock",
+            list(rangeSelector = list(
+                                    selected = 4)))%>%
+  hc_chart(backgroundColor = fondoplot)%>%
+  hc_yAxis_multiples(
+    create_yaxis(4, 
+                 height = c(1, 1, 1,1), 
+                 turnopposite = TRUE))%>%
+  hc_add_series(fruta_dec$x, yAxis = 0, name = "Observado")%>%
+  hc_add_series(fruta_dec$seasonal, yAxis = 1, name = "Seasonal", color = "rgba(236, 85, 226, .91)")%>%
+  hc_add_series(fruta_dec$trend, yAxis = 2, name = "Tendencia")%>%
+  hc_add_series(fruta_dec$random, yAxis = 3, name = "Aleatorio")%>%
+  hc_tooltip(crosshair = TRUE,
+             shared = TRUE,
+             split = FALSE)%>%
+  hc_xAxis(type = 'datetime',
+           dateTimeLabelFormats = list(day = '%e of %b'))
+    }else{
+      
+      if(input$Tipo_p == "Seasonal"){
+      
+       if(input$Fruta_p == "Zarzamora"){ 
+        fruta  <- data.frame(Fecha = as.Date(index(zar_usda()$Close)), Close = zar_usda()$Close)%>%
+          filter(Fecha >= as.Date("2013-09-01"))%>%
+          tiempos2("Temporada")
+             
+        
+        
+       
+        
+       }else{
+         if(input$Fruta_p == "Arandano"){
+        fruta <- data.frame(Fecha = as.Date(index(ara_usda()$Close)), Close = ara_usda()$Close)%>%
+          filter(Fecha >= as.Date("2013-09-01"))%>%
+          tiempos2("Temporada")
+          
+                 }
+         
+       }
+    
+   hc <- highchart(type  = "chart")%>%
+   hc_xAxis(categories = sort(unique(data.frame(Semana = factor(c(1:52), 
+                                                               levels = (c(34:85)%%52 + 1), 
+                                                               ordered = TRUE))[,1])),
+           crosshair = TRUE)%>%
+    hc_chart(zoomType = "xy", panKey = "ctrl", panning = TRUE, backgroundColor = fondoplot)%>%
+    hc_tooltip(crosshair = TRUE,
+               shared = TRUE,
+               split = FALSE)%>%
+   hc_plotOptions(line = list(tooltip = list( useHTML= TRUE,
+                                              headerFormat =  '<small>Semana:{point.key}</small><table>',
+                                              pointFormat = '<br><tr><td style="color: {point.color}"> {series.name} : </td></br>
+                                                             <br style="color: #000000"> {point.y} Cajas</br>' ,
+                                              valueDecimals = 2)))
+ if(input$Cat_usda == "Precio"){     
+    
+   for(var in sort(unique(fruta$Temporada))){
+       
+       x <- fruta%>%
+         filter(Temporada == var)%>%
+         tiempos2("Semana")%>%
+         ddply(.(Semana), 
+               summarize,
+               Promedio = mean(Close, na.rm = TRUE))%>%
+         semanas(Campos = list(Promedio = NA))%>%
+         arrange(Semana)
+     
+     serie <- list(list(x = x$Semana, data = x$Promedio, name = var))
+     
+      hc <- hc_add_series_list(hc, serie) 
+       
+     }}else{
+       
+      for(var in sort(unique(fruta$Temporada))){ 
+       
+       
+       x <- fruta%>%
+         filter(Temporada == var)%>%
+         tiempos2("Semana")%>%
+         #ddply(.(Semana), 
+          #     summarize,
+           #    Promedio = mean(Close, na.rm = TRUE))%>%
+         mutate(Promedio = Close)%>%
+         semanas(Campos = list(Promedio = NA))%>%
+         arrange(Fecha)
+     
+     serie <- list(list(x = x$Semana, data = x$Promedio, name = var))
+     
+      hc <- hc_add_series_list(hc, serie) 
+     }
+     
+       
+     
+   }
+   
+   hc
+  
+    
+   #Proyeccion
+   
+      }else{
+          if(input$Tipo_p == "Proyeccion"){
+            if(input$Fruta_p == "Zarzamora"){
+              if(input$Cat_usda == "Precio"){
+                
+                fit <- read_rds("zar_fit.RDS")
+
+    fruta <-  data.frame(Fecha = index(zar_usda()$Close), Close = zar_usda()$Close)%>%
+      tiempos("Semanats")%>%
+      ddply(.(Semanats), summarize, Promedio = mean(Close), Fecha = min(Fecha))%>%
+      arrange(Semanats)
+    
+    
+    fruta_ts <- ts(fruta$Promedio, 
+                   start = c(min(as.integer(format(fruta$Fecha, 
+                                                   format = "%Y"))), 
+                             min(fruta$Semanats)),
+                   frequency = 52)
+              }else{
+                fit <- read_rds("zar_fit.RDS")
+
+    fruta <-  data.frame(Fecha = index(zar_usda()$Close), 
+                         Promedio = zar_usda()$Close)%>%
+      rename(Promedio = Close)%>%
+      tiempos("Semanats")%>%
+     # ddply(.(Semanats), summarize, Promedio = Close, Fecha = min(Fecha))%>%
+      arrange(Semanats)
+    
+    
+    fruta_ts <- ts(fruta$Promedio, 
+                   start = c(min(as.integer(format(fruta$Fecha, 
+                                                   format = "%Y"))), 
+                             min(fruta$Semanats)),
+                   frequency = 52)
+              }
+              
+              
+  
+            
+    
+    
+    }else{
+              if(input$Fruta_p == "Arandano"){
+                
+                if(input$Cat_usda == "Precio"){
+                        fit <- read_rds("ara_fit.RDS")
+                
+fruta <-  data.frame(Fecha = index(ara_usda()$Close), Close = ara_usda()$Close)%>%
+      tiempos("Semanats")%>%
+      ddply(.(Semanats), summarize, Promedio = mean(Close), Fecha = min(Fecha))%>%
+      arrange(Semanats)
+    
+    fruta_ts <- ts(fruta$Promedio, 
+                   start = c(min(as.integer(format(fruta$Fecha, 
+                                                   format = "%Y"))), 
+                             min(fruta$Semanats)),
+                   frequency = 52)
+                  
+                }else{
+                        fit <- read_rds("ara_fit.RDS")
+                
+fruta <-  data.frame(Fecha = index(ara_usda()$Close), 
+                     Promedio = ara_usda()$Close)%>%
+  rename(Promedio = Close)%>%
+      tiempos("Semanats")%>%
+    #  ddply(.(Semanats), summarize, Promedio = sum(Close), Fecha = min(Fecha))%>%
+      arrange(Semanats)
+    
+    fruta_ts <- ts(fruta$Promedio, 
+                   start = c(min(as.integer(format(fruta$Fecha, 
+                                                   format = "%Y"))), 
+                             min(fruta$Semanats)),
+                   frequency = 52)
+                }
+              }
+            }
+        
+
+
+x <- forecast(fit,h=5)
+
+
+proyeccion <- data.frame(Semanats = max(fruta$Semanats)+ c(1:5),
+                         Promedio = x$mean, 
+                         Fecha = max(fruta$Fecha) +c(1:5)*7)%>%
+  mutate(dt = datetime_to_timestamp(Fecha))
+                         
+range_80 <- data.frame(low = x$lower[,1], high = x$upper[,1], Fecha = proyeccion$dt)
+range_95 <- data.frame(low = x$lower[,2], high = x$upper[,2], Fecha = proyeccion$dt)
+
+df <- tail(fruta,8)%>%
+  mutate(dt = datetime_to_timestamp(Fecha))
+
+hc <- highchart()%>%
+  hc_xAxis(type = "datetime", dateTimeLabelFormats = list(day = '%d of %b'))%>%
+  hc_colors(colors = c('#6CF', '#39F', '#06C', '#036', '#000'))%>%
+  hc_add_series(df, type = "line", hcaes(dt, Promedio), name = "Observado")%>%
+  hc_add_series(proyeccion, type = "line", hcaes(dt, Promedio), name = "ets", zIndex = 3)%>%
+    hc_add_series(range_95,  hcaes(x = Fecha), type = "arearange", name = "ets95%", color = "rgba(17,73, 132, .75)")%>%
+    hc_add_series(range_80,  hcaes(x = Fecha), type = "arearange", name = "ets80%", color = "rgba(63,141, 216, .75)")%>%
+      hc_plotOptions(line = list(tooltip = list( useHTML= TRUE,
+                                             shared = TRUE,
+                                             headerFormat =  '<small>Fecha: {point.key}</small><br>',
+                                             pointFormat = '<br><br><tr><td style="color: #000000; font-size: 15px">
+                                                            {series.name} : </td>
+                                             <td style="color: #000000"> {point.y} USD <br></td></br><br><br>' ,
+                                             valueDecimals = 2)),
+                     arearange = list(tooltip = list(valueDecimals = 2)))%>%
+                 
+  hc_tooltip(crosshair = TRUE,
+             shared = TRUE,
+             split = FALSE)
+  
+  hc
+            }
+        }
+    
+  
+    
+})
+```
+
+Grafico 
+----------------------------------------------------------------------------
+###
+```{r, context = "render"}
+
+highchartOutput("Precios_master")
+
+```
+
