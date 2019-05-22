@@ -1,0 +1,221 @@
+---
+title: "TANGANCICUARO"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    logo: images/logo.JPG
+    favicon: images/logo.JPG
+runtime: shiny_prerendered
+
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(DT)
+source("funciones.R")
+
+```
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+```{r context = "server-start"}
+
+library(RPostgres)
+myfetch <- function(nombre,base = FALSE){
+ 
+   tbl(con, nombre) 
+ 
+ 
+}
+
+con <- DBI::dbConnect(drv=RPostgres::Postgres(),
+                      host = "localhost", 
+                      dbname = "tangancicuaro", 
+                      user = "postgres", 
+                      password = "Cyan98150896", 
+                      port = 5432)
+
+library(tidyr)
+library(kableExtra)
+library(rhandsontable)
+
+```
+
+
+
+```{r context = "server"}
+
+
+   shinyInput <- function(FUN, len, id, ...) {
+      inputs <- character(length(len))
+      for (i in 1:length(len)) {
+        clave <- len[i]
+        inputs[i] <- as.character(FUN(paste0(id, clave), ...))
+      }
+      inputs
+    }
+
+
+productores <- reactive({
+  
+ input$select_button
+  
+  input$Guardar_datos
+  
+  myfetch("Productores")%>%
+  collect()
+  })
+
+telefonos <- myfetch("Telefonos_prod")%>%
+  collect()
+
+resumen_prod <- reactive({
+  
+  
+  
+  productores()%>%
+  mutate(Nombre_completo = paste(Nombre, Apellido_pat, Apellido_mat))%>%
+  select(Clave_productor, Nombre_completo)})
+
+
+  data <- reactive({
+    data.frame(
+    Clave_productor = resumen_prod()$Clave_productor,  
+    Nombre_completo = resumen_prod()$Nombre_completo,
+    Delete = shinyInput(actionButton, 
+                          resumen_prod()$Clave_productor, 
+                          'button_', 
+                          label = "Delete", 
+                          onclick = 'Shiny.onInputChange(\"select_button\",  this.id)'),
+      stringsAsFactors = FALSE,
+      row.names = 1:length(resumen_prod()$Clave_productor))
+  }) 
+
+output$Resumen_prod <- renderDataTable(
+  data()%>%arrange(Clave_productor),  server = FALSE, escape = FALSE, selection = 'none')
+
+ 
+#reactivos
+
+
+  Clave <- reactive({as.numeric(strsplit(input$select_button, "_")[[1]][2])})
+  
+  Name <- reactive({
+    
+    
+    
+    resumen_prod()%>%
+      filter(Clave_productor == Clave())%>%
+      mutate(Clave_nombre = paste(Clave_productor, Nombre_completo))%>%
+      select(Clave_nombre)}) 
+  
+  datos <- reactive({
+    productores()%>%
+    filter(Clave_productor == Clave())%>%
+    gather("Campo", "Valor")}) 
+  
+  contactos <- reactive({
+    telefonos%>%
+    filter(Clave_productor == Clave())%>%
+    select(Numero, Comentarios)
+  })
+
+#mostrar datos  
+  
+  observeEvent(input$select_button, {
+  
+      
+  showModal(
+      
+    modalDialog(title = Name(),
+      tabsetPanel(
+          tabPanel("Contactos",  HTML(kable2(contactos()))),
+          tabPanel("Datos",  HTML(kable2(datos())))
+        ),
+      footer = tagList(
+          actionButton("Editar_datos", "Editar"),
+          modalButton("CERRAR", 
+                    icon = icon("window-close", 
+                                class = NULL, 
+                                lib = "font-awesome"))
+        )))
+  })
+  
+  
+  
+  observeEvent(input$Editar_datos,{
+    
+    showModal(
+       modalDialog(title = Name(),
+      tabsetPanel(
+          tabPanel("Contactos", HTML(kable2(contactos()))),
+          tabPanel("Datos",  rHandsontableOutput("Datos"))
+        ),
+      footer = tagList(
+          actionButton("Guardar_datos", "Guardar", 
+                       icon = icon("window-close", 
+                                class = NULL, 
+                                lib = "font-awesome")),
+          modalButton("Cancelar", 
+                    icon = icon("window-close", 
+                                class = NULL, 
+                                lib = "font-awesome")))
+      
+    
+ 
+        ))
+  
+  })
+    
+#Datos editados
+  
+  output$Datos <- renderRHandsontable(rhandsontable(datos())%>%
+                     hot_col("Campo", readOnly = TRUE))
+  
+  trigger_datos <- reactive({
+    if(is.null(input$Datos)){return(datos())}
+    else if(!identical(datos(),input$Datos)){
+      # hot.to.df function will convert your updated table into the dataframe
+      as.data.frame(hot_to_r(input$Datos))
+    }
+  })
+  
+  observeEvent(input$Guardar_datos,{
+    
+      input$Datos%>%
+        hot_to_r()%>%
+      spread("Campo", "Valor")%>%
+        dbwriterow("Clave_productor", "Productores", Clave(), conn = con)
+      
+    
+      removeModal()
+  })
+
+#output$Prueba <- renderDataTable(datatable((prueba()))) 
+
+```
+
+
+PRODUCTORES
+===================================================
+
+
+
+
+Prueba{.tabset}
+------------------------------------------------------------
+
+### Productores
+```{r }
+dataTableOutput("Resumen_prod")
+
+```
+
+###Prueba
+
+```{r}
+#dataTableOutput("Prueba")
+```
+

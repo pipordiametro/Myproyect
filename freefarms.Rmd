@@ -1,8 +1,8 @@
 ---
-title: "ALPASA FARMS"
+title: "FREE FARMS"
 output: 
   flexdashboard::flex_dashboard:
-    orientation: columns
+    orientation: rows
     vertical_layout: fill
     logo: images/logo.JPG
     favicon: images/logo.JPG
@@ -13,191 +13,140 @@ runtime: shiny_prerendered
 ```{r, context = "setup"}
 options(shiny.port=9999)
 library(flexdashboard)
+library(plyr)
+library(dplyr)
 library(DT)
 library(stringr)
 library(tidyr)
 library(highcharter)
 library(rmarkdown)
 library(xts)
-library(forecast)
 library(dbplyr)
 #library(future)
 #library(foreach)
 library(shinyjs)
 library(purrr)
+library(readr)
+library(kableExtra)
+library(rhandsontable)
+library(DBI)
+
+#source("funciones.R")
 
 
-source("funciones.R")
+
+
+
+
+
 ```
 
 ```{r context = "server-start"}
-options(shiny.port = 9999)
-library(RPostgres)
-myfetch <- function(nombre,base = FALSE){
- 
-   tbl(con, nombre) 
- 
- 
-}
+library(forecast)
 
 
+#carga de las bases de datos
+source("dbenv.R")
 
+source("freefarmsFun.R")
+   
+   
+#reactivos base de datos
+dbr <- reactiveValues(
 
-saveReg <- function(mother, child, 
-                      motherTable = as.character(bquote(mother)), 
-                      childTable = as.character(bquote(hija))) {
-    
-    bind_rows(readRDS(paste0(motherTable, ".RDS")),
-              mother)%>%
-      write_rds(paste0(motherTable, ".RDS"))
-    
-    
-    bind_rows(readRDS(paste0(childTable, ".RDS")),
-              child)%>%
-      write_rds(paste0(childTable, ".RDS"))
-    
-    
-}
+productores = dbenv$productores%>%
+  collect(),
 
+telefonos = dbenv$telefonos%>%
+  collect(),
 
+pallets = dbenv$pallets%>%
+  collect(),
 
+pallets_reg = dbenv$pallets_reg%>%
+  collect())
 
-
-
-con <- DBI::dbConnect(drv=RPostgres::Postgres(),
-                      host = "localhost", 
-                      dbname = "ALFIN", 
-                      user = "postgres", 
-                      password = "magadan13", 
-                      port = 5432)
-
-library(tidyr)
-library(kableExtra)
-library(rhandsontable)
 
 ```
 
+
 ```{r context = "server"}
-
-
-   shinyInput <- function(FUN, len, id, ...) {
-      inputs <- character(length(len))
-      for (i in 1:length(len)) {
-        clave <- len[i]
-        inputs[i] <- as.character(FUN(paste0(id, clave), ...))
-      }
-      inputs
-    }
-#Productores
-
-productores <- reactive({
-  
-  input$select_button
-  
-  input$Guardar_datos
-  
-  input$Guardar_alta
-  
-  input$Guardar_contactos
-  
-  myfetch("productores")%>%
-  collect()
-  })
-
-telefonos <- reactive({ 
-  input$Guardar_alta
-  input$Guardar_contactos
-  
-  myfetch("productoresContactos")%>%
-  collect()})
-
 resumen_prod <- reactive({
   
   
   
-  productores()%>%
+  dbr$productores%>%
   mutate(Nombre_completo = paste(Nombre, Apellido_paterno, Apellido_materno))%>%
   select(Id_productor, Clave_productor, Nombre_completo)})
 
 
-  data <- reactive({
-    data.frame(
-    Id_productor = resumen_prod()$Id_productor,
-    Clave_productor = resumen_prod()$Clave_productor,  
-    Nombre_completo = resumen_prod()$Nombre_completo,
-    Delete = shinyInput(actionButton, 
-                          resumen_prod()$Id_productor, 
-                          'button_', 
-                          label = "Delete", 
-                          onclick = 'Shiny.onInputChange(\"select_button\",  this.id)'),
-      stringsAsFactors = FALSE,
-      row.names = 1:length(resumen_prod()$Id_productor))
+dataRP <- reactive({
+    resumen_prod()%>%
+    mutate(
+      Acciones = shinyInput(actionButton, 
+                          resumen_prod()$Clave_productor, 
+                          'editProd_', 
+                          label = "Editar", 
+                          onclick = 'Shiny.onInputChange(\"editProd\",  this.id)'))
+     # stringsAsFactors = FALSE,
+      #row.names = 1:length(resumen_prod()$Id_productor))
   }) 
 
-output$Resumen_prod <- renderDataTable(
-  data()%>%
-    arrange(Clave_productor),  server = FALSE, escape = FALSE, selection = 'none')
 
- 
-#reactivos
+output$Resumen_prod <- renderDT(
+  dataRP()%>%
+    arrange(Clave_productor), escape = FALSE, selection = 'none')
 
 
-  Clave <- reactive({as.numeric(strsplit(input$select_button, "_")[[1]][2])})
+
+
+
+```
+Productores
+========================================================
+###Productores
+```{r}
+
+actionButton("Alta_productor", "Agregar Productor")
+DTOutput("Resumen_prod")
+```
+
+
+```{r context = "server"}
+
+Clave <- reactive({as.numeric(strsplit(input$editProd, "_")[[1]][2])})
   
   Name <- reactive({
     
     
     
     resumen_prod()%>%
-      filter(Id_productor == Clave())%>%
+      filter(Clave_productor == Clave())%>%
       mutate(Clave_nombre = paste(Clave_productor, Nombre_completo))%>%
       select(Clave_nombre)}) 
-  #Datos
+  
   datos <- reactive({
-    productores()%>%
-    filter(Id_productor == Clave())%>%
+    dbr$productores%>%
+       select(-Usuario_creacion, 
+             -Fecha_creacion,  
+             -Cancelado, -Usuario_cancel, -Fecha_cancel, -Motivo_cancel)%>%
+    filter(Clave_productor == Clave())%>%
     gather("Campo", "Valor")}) 
-  #COntactos
+  
   contactos <- reactive({
-    input$Guardar_alta
-     
-    telefonos()%>%
-    filter(Id_productor == Clave())%>%
-    select(Tipo, Contacto)
-  })
-
-#mostrar datos  
-  
-  observeEvent(input$select_button, {
-  
-      
-  showModal(
-      
-    modalDialog(title = Name(),
-      tabsetPanel(
-          tabPanel("Contactos",  HTML(kable2(contactos()))),
-          tabPanel("Datos",  HTML(kable2(datos())))
-        ),
-      footer = tagList(
-          actionButton("Editar_datos", "Editar"),
-          modalButton("CERRAR", 
-                    icon = icon("window-close", 
-                                class = NULL, 
-                                lib = "font-awesome"))
-        )))
+    dbr$telefonos%>%
+    filter(Clave_productor == Clave())%>%
+    select(Contacto)
   })
   
   
-  
-  observeEvent(input$Editar_datos,{
+    observeEvent(input$Editar_datos,{
     
     showModal(
        modalDialog(title = Name(),
       tabsetPanel(
-          tabPanel("Contactos", 
-                   HTML(kable2(contactos())),
-                   actionButton("Agregar_contacto", "NUEVO")),
-          tabPanel("Datos",  rHandsontableOutput("Datos"))
+          tabPanel("Contactos", HTML(kable3(contactos()))),
+          tabPanel("Datos",  rHandsontableOutput("Prod_edit"))
         ),
       footer = tagList(
           actionButton("Guardar_datos", "Guardar", 
@@ -217,7 +166,7 @@ output$Resumen_prod <- renderDataTable(
     
 #Datos editados
   
-  output$Datos <- renderRHandsontable(rhandsontable(datos())%>%
+  output$Prod_edit <- renderRHandsontable(rhandsontable(datos())%>%
                      hot_col("Campo", readOnly = TRUE))
   
   trigger_datos <- reactive({
@@ -230,80 +179,60 @@ output$Resumen_prod <- renderDataTable(
   
   observeEvent(input$Guardar_datos,{
     
-      input$Datos%>%
+      input$Prod_edit%>%
         hot_to_r()%>%
       spread("Campo", "Valor")%>%
-        dbwriterow("Id_productor", "Productores", Clave(), conn = con)
+    dbUpdateRow("Clave_productor", "productores", 
+                    Clave(), 
+                    conn = con)
       
     
       removeModal()
   })
 
-#output$Prueba <- renderDataTable(datatable((prueba()))) 
-
-#Formulario Agregar contactos  
-observeEvent(input$Agregar_contacto,
-             {
-               showModal(
-                 modalDialog(title = Name(),
-                             div(style="display: inline-block;vertical-align:top; width: 150px;",
-                                 selectizeInput("Tipo_contacto", "TIPO", choices = c("Casa", "Celular", "Correo"))),
-                             div(style="display: inline-block;vertical-align:top; width: 150px;",
-                                 textInput(inputId = "Telefono_nuevo", label = "Contacto", placeholder = "Agregue  un  contacto")),
-                             footer = tagList(
-                               actionButton("Guardar_contactos", "Guardar", 
-                                            icon = icon("window-close", 
-                                                        class = NULL, 
-                                                        lib = "font-awesome")),
-                               modalButton("Cancelar", 
-                                           icon = icon("window-close", 
-                                                       class = NULL, 
-                                                       lib = "font-awesome")))
-                             
-                            )
-               )
-               
-             })
-
-
-observeEvent(input$Guardar_contactos,
-             {
-            contactos <-   data.frame(Clave_productor = Clave() ,
-                          Tipo = input$Tipo_contacto,
-                          Contacto = input$Telefono_nuevo)
-               
-               dbWriteTable(con , name = "productoresContactos", contactos, append = TRUE)
-               
-               
-               removeModal()
-             })
 
 
 
+ observeEvent(input$editProd,{
+   showModal(
+      
+    modalDialog(title = Name(),
+      tabsetPanel(
+          tabPanel("Contactos",  HTML(kable3(contactos()))),
+          tabPanel("Datos",  HTML(kable3(datos())))
+        ),
+      footer = tagList(
+          actionButton("Editar_datos", "Editar"),
+          modalButton("CERRAR", 
+                    icon = icon("window-close", 
+                                class = NULL, 
+                                lib = "font-awesome"))
+        )))
+   
+   
+   dbr$productores <-  dbenv$productores%>%
+  collect()
+
+ dbr$telefonos <-  dbenv$telefonos%>%
+  collect()
+   
+   
+   
+   
+   
+ })
+```
+
+```{r context = "server"}
 #Modal Agregar Productor
-
-
-
 
 #Formulario Alta
 
-
 output$Test_clave_productor <- renderUI({
-  if(input$Nueva_clave %in% productores()$Clave_productor){
+  if(input$Nueva_clave %in% dbr$productores$Clave_productor){
  paste("Esta Clave ya esta siendo usada")
 }
   })
-
-labelMandatory <- function(label) {
-  tagList(
-    label,
-    span("*", class = "mandatory_star")
-  )
-}
-
-appCSS <- ".mandatory_star { color: red; }"
-
-
 
 #Alta productores  
 observeEvent(input$Alta_productor,
@@ -313,7 +242,7 @@ observeEvent(input$Alta_productor,
                   title = "Escriba los datos del productor",
                   tabsetPanel(
                     tabPanel(labelMandatory("Nombre"),
-                             numericInput("Nueva_clave", label = "Clave Productor", value = max(c(max(productores()$Clave_productor),999)) + 1),
+                             numericInput("Nueva_clave", label = "Clave Productor", value = max(c(max(dbr$productores$Clave_productor),999)) + 1),
                              textInput("Nombre_productor", label = labelMandatory("Nombre") ),
                              textInput("Apellido_paterno", label = labelMandatory("Apellido Paterno")),
                              textInput("Apellido_materno", label = labelMandatory("Apellido Materno")),
@@ -556,40 +485,29 @@ sectores_alta = reactive({
 
 observeEvent(input$Guardar_alta,
              {
-               
-               dbBegin(con)
                tryCatch({
+              dbWithTransaction(con,{
                    
               dbWriteTable(value = productor_alta(), name = "productores", conn = con, append = TRUE)
                  
-valores$Id_nuevo <- myfetch("productores")%>%
-  select(Id_productor)%>%
-  collect()%>%
-  max()
-  
-                 
-              dbWriteTable(value =  contactos_alta()%>%
-                             mutate(Id_productor  = valores$Id_nuevo), name = "productoresContactos", conn = con , append = TRUE)
+              dbWriteTable(value =  contactos_alta(), name = "productoresContactos", conn = con , append = TRUE)
               
-              dbWriteTable(value = cuentas_alta()%>%
-                             mutate(Id_productor  = valores$Id_nuevo), name = "productoresCuentas", conn = con, append = TRUE)
+              dbWriteTable(value = cuentas_alta(),
+                              name = "productoresCuentas", conn = con, append = TRUE)
               
-              dbWriteTable(value = huertas_alta()%>%
-                             mutate(Id_productor  = valores$Id_nuevo), name = "huertas", conn = con, append = TRUE)
+              dbWriteTable(value = huertas_alta(), name = "huertas", conn = con, append = TRUE)
               
-              dbWriteTable(value = sectores_alta()%>%
-                             mutate(Id_productor  = valores$Id_nuevo), name = "sectores",conn = con, append = TRUE)
-                 
-               
+              dbWriteTable(value = sectores_alta(), name = "sectores",conn = con, append = TRUE)
+              })
                  },error = function(err){
                    print(paste("My errr", err))
-                   dbRollback(con)
-                 },#warning = function(w){
-                   #  print(paste("My war:", w))
-                   #},
+                   #dbRollback(con)
+                 },warning = function(w){
+                     print(paste("My war:", w))
+                   },
             finally = {
               
-              dbCommit(con)
+              #dbCommit(con)
               
               removeModal()
             })
@@ -621,33 +539,6 @@ observeEvent(input$Agregar_huerta,
 
 
 ```
-
-
-PRODUCTORES
-===================================================
-
-
-Prueba{.tabset}
-------------------------------------------------------------
-
-### Productores
-```{r }
-
-
-actionButton("Alta_productor", "Agregar Productor")
-
-dataTableOutput("Resumen_prod")
-
-```
-
-###Prueba
-
-```{r}
-#dataTableOutput("Prueba")
-```
-
-
-
 
 PRECIOS
 ==================================================================================
@@ -737,7 +628,7 @@ output$Precios_master <- renderHighchart(
        if(input$Fruta_p == "Zarzamora"){ 
         fruta  <- data.frame(Fecha = as.Date(index(zar_usda()$Close)), Close = zar_usda()$Close)%>%
           filter(Fecha >= as.Date("2013-09-01"))%>%
-          tiempos2("Temporada")
+          tiempos("Temporada")
              
         
         
@@ -747,7 +638,7 @@ output$Precios_master <- renderHighchart(
          if(input$Fruta_p == "Arandano"){
         fruta <- data.frame(Fecha = as.Date(index(ara_usda()$Close)), Close = ara_usda()$Close)%>%
           filter(Fecha >= as.Date("2013-09-01"))%>%
-          tiempos2("Temporada")
+          tiempos("Temporada")
           
                  }
          
@@ -773,7 +664,7 @@ output$Precios_master <- renderHighchart(
        
        x <- fruta%>%
          filter(Temporada == var)%>%
-         tiempos2("Semana")%>%
+         tiempos("Semana")%>%
          ddply(.(Semana), 
                summarize,
                Promedio = mean(Close, na.rm = TRUE))%>%
@@ -791,7 +682,7 @@ output$Precios_master <- renderHighchart(
        
        x <- fruta%>%
          filter(Temporada == var)%>%
-         tiempos2("Semana")%>%
+         tiempos("Semana")%>%
          #ddply(.(Semana), 
           #     summarize,
            #    Promedio = mean(Close, na.rm = TRUE))%>%
@@ -945,7 +836,7 @@ highchartOutput("Precios_master")
 ```
 
 
-ENTRADAS
+ENTRADAS {data-orientation=columns}
 ========================================================================
 
 REGISTRO NUEVO
@@ -972,12 +863,12 @@ valores <- reactiveValues()
 
 
 valores$Nombre_productos <- left_join(
-  left_join(myfetch("productos")%>%
+  left_join(dbenv$productos%>%
               #filter(Activo == "A")%>%
               select(Clave_producto, Clave_presentacion, Clave_fruta, Nombre),
-            myfetch("presentaciones")%>%
+            dbenv$presentaciones%>%
               select(Clave_presentacion, Cantidad, Peso, Unidad)),
-  myfetch("fruta")%>%
+  dbenv$fruta%>%
     select(Clave_fruta, Nombre_corto, Variedad_corto, Tipo_corto))%>%
   collect()%>%
   transmute(Clave_producto = Clave_producto,
@@ -1082,15 +973,7 @@ observeEvent(input$Nuevo_registro, {
 
 ###{data-height=350}
 ```{r context = "server"}
-  jalarinputs <- function(campos, input){
-    
-    data <- sapply(campos, function(x) input[[x]])
-    
-  as.data.frame(t(data),
-                stringsAsFactors = FALSE)
-    
-    
-  }
+
 
 valores$fruEmp_reg <- data.frame()
 
@@ -1105,27 +988,27 @@ observeEvent(input$Palletizar,{
 
 
 observeEvent(input$Guardar_fruta, {
-   dbWithTransaction(con,{
-  dbWriteTable(con, "fruEmp", mother%>%
+  
+  saveReg(mother = jalarinputs(camposMother, input = input)%>%
                  mutate(Clave_productor = str_match(Productor, "^[[0-9]]{0,3}")[,1],
                         Fecha_fruEmp = as.Date(as.numeric(Fecha_fruEmp), 
                                                origin = "1970-01-01"),
                         Folio = as.numeric(Folio))%>%
-                 select(-Cliente, -Productor), append = TRUE)
-    
-    nuevoId <- myfetch("fruEmp")%>%
-      select(Id_fruEmp)%>%
-      collect()%>%
-      max()
-    
-  dbWriteTable(con, 
-               "fruEmp_reg",
-               valores$fruEmp_reg%>%
+                 select(-Cliente, -Productor),
+          
+          
+          motherTable = "fruEmp",
+          
+          child = valores$fruEmp_reg%>%
     rename(Nombre_completo = Producto)%>%
     merge(valores$Nombre_productos)%>%
     select(-Nombre_completo, Clave_producto)%>%
-                 mutate(Id_fruEmp = nuevoId), 
-               append = TRUE)  })
+                 mutate(Id_fruEmp = nuevoId),
+    
+    childTable = "fruEmp_reg"
+          
+          )
+  
   
  walk(disable, c(camposMother, camposChild))
   
@@ -1161,8 +1044,7 @@ dataTableOutput("Palletizado")
 #valores$pallets <-   myfetch("pallets")
 
 output$Palletizado <- renderDataTable(
-  myfetch("pallets")%>%
-    collect()%>%
+  dbr$pallets_reg%>%
   ddply(.(No_pallet), summarize, Total = sum(Cantidad))%>%
   mutate(Limite = 240,
          Faltantes = Limite-Total)%>%
@@ -1177,8 +1059,3 @@ output$Palletizado <- renderDataTable(
 ```{r}
 actionButton("Guardar_fruta", "Grabar")
 ```
-
-
-
-
-

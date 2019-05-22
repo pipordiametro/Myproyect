@@ -870,7 +870,7 @@ selectizeInput("Producto_e", label = "Filtre un producto", options = list(placeh
 
 entradas <- reactive({
   
-  x <- entradas_fruta%>%
+  x <- entradas%>%
     get.productos(Campos = c("Fruta", "Producto"))%>%
     filter( Fruta %in% input$Frutas_e, Fecha >= input$Fechas_e[1], Fecha <= input$Fechas_e[2])
     

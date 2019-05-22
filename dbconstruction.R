@@ -33,9 +33,9 @@ library(DBI)
 
 con <- DBI::dbConnect(drv=RPostgres::Postgres(),
                       host = "localhost", 
-                      dbname = "tangancicuaro", 
+                      dbname = "ALFIN", 
                       user = "postgres", 
-                      password = "Cyan98150896", 
+                      password = "magadan13", 
                       port = 5432)
 
 
@@ -49,9 +49,9 @@ productores_alta <- productores%>%
 con2 <- DBI::dbConnect(odbc::odbc(),
                       Driver   = "PostgreSQL Unicode(x64)",
                       Server   = "localhost",
-                      Database = "tangancicuaro",
+                      Database = "ALFIN",
                       UID      = "postgres",
-                      PWD      = "Cyan98150896",
+                      PWD      = "magadan13",
                       Port     = 5432)
 
 
@@ -114,7 +114,7 @@ dbExecute(con, "CREATE INDEX \"fki_contactos_fk_productores\"
     ON public.\"productoresContactos\"(\"Clave_productor\");")
 
 
-huertas <- readRDS("C:/Users/Alpasa 2/Documents/R/Compras/proyecto/tbHuertas.RDS")%>%
+huertas <- readRDS("proyecto/tbHuertas.RDS")%>%
   filter(strCan_cel == "NO")%>%
   transmute(Id_huertasDb = intNum_reg, Clave_productor = intCla_pro, Clave_huerta = intCla_hue,
             Nombre = strNom_bre, Alias = strAli_as, Superficie = floSuperficie, 
@@ -141,7 +141,7 @@ dbExecute(con, "ALTER TABLE public.huertas
 dbExecute(con, "CREATE INDEX \"fki_Huertas_fk_Productores\"
     ON public.huertas(\"Clave_productor\");")
 
-sectores <- readRDS("C:/Users/Alpasa 2/Documents/R/Compras/proyecto/tbSectores.RDS")%>%
+sectores <- readRDS("proyecto/tbSectores.RDS")%>%
   filter(strCan_cel == "NO")%>%
   transmute(Id_sectoresDb = intNum_reg, Clave_productor = intCla_pro, Clave_huerta = intCla_hue,
          Clave_sector = intCla_sec, Nombre = strNom_bre, Superficie = floSuper_ficie)%>%
